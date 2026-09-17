@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Wind Tunnel Simulator</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e13'/%3E%3Cpath d='M16 5l1.6 9.2 8.4 3.1v2l-8.4-1.4-.7 5.4 3 2.1v1.3L16 25.6l-3.9 1.1v-1.3l3-2.1-.7-5.4L6 19.3v-2l8.4-3.1z' fill='%234da3ff'/%3E%3C/svg%3E"
+    />
+    <meta
+      name="description"
+      content="An interactive 3D wind tunnel for commercial airliners, from the de Havilland Comet to the Airbus A350."
+    />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="viewport"></canvas>
+
+      <aside id="selector" class="panel">
+        <header class="panel-header">
+          <h1>Wind Tunnel</h1>
+          <p class="subtitle">Commercial airliners, 1949 to today</p>
+        </header>
+        <div id="aircraft-list" class="aircraft-list"></div>
+      </aside>
+
+      <section id="info" class="panel info-panel" hidden>
+        <div class="info-head">
+          <span class="info-year" id="info-year"></span>
+          <h2 id="info-name"></h2>
+          <p class="info-maker" id="info-maker"></p>
+        </div>
+        <p class="info-innovation" id="info-innovation"></p>
+        <dl class="info-stats" id="info-stats"></dl>
+        <p class="info-note">Dimensions are published figures.</p>
+      </section>
+
+      <div id="loading" class="loading" hidden><span></span>Building aircraft…</div>
+
+      <footer class="hint">Drag to orbit &middot; scroll to zoom &middot; right-drag to pan</footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
