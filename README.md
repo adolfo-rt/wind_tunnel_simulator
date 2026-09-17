@@ -40,7 +40,7 @@ The project is built in stages, each independently testable.
 | Stage | What it adds | Status |
 |---|---|---|
 | 1 | Aircraft selector and 3D viewer | Done |
-| 2 | Wind tunnel, fans, speed control | Planned |
+| 2 | Wind tunnel, fans, speed control | Done |
 | 3 | Flow field solver | Planned |
 | 4 | Volumetric streamlines | Planned |
 | 5 | Surface pressure visualisation | Planned |
@@ -78,6 +78,33 @@ aircraft genuinely changes the flow.
 Concorde gets its own planform generator: its leading edge curves from roughly 80 degrees
 of sweep at the root to 55 at the tip, the ogee shape that gives the ogival delta its
 name.
+
+## The wind tunnel
+
+The working section is a transparent cylinder sized around whichever aircraft is
+loaded, with a fan at each end: the upstream one drives air in, the downstream one draws
+it out. Real closed-circuit tunnels put the drive fan downstream for that reason, so the
+working section sees smoothly drawn air rather than the fan's own swirl. A honeycomb
+straightener sits just behind the inlet fan, which is what removes the residual swirl and
+makes the flow in the working section worth simulating at all.
+
+The shell has to be see-through without disappearing, so it is drawn with a Fresnel
+term: nearly clear where you look straight through it, brightest at the silhouette where
+the surface turns away. Hoops and stringers give the eye something solid to judge the
+tube by.
+
+The speed slider drives both rotors, eased so they spool up and down like machinery with
+rotating mass rather than snapping between speeds. The readouts underneath are the
+interesting part:
+
+- **Mach** says whether compressibility is in play. The tunnel runs at sea level, so its
+  Mach is its own; the aircraft's design cruise Mach is shown beside it for comparison.
+  They differ because the speed of sound falls with temperature, so the same Mach number
+  is roughly fifteen per cent slower down here than at the tropopause. Concorde's Mach
+  2.02 is simply beyond this tunnel, and the interface says so rather than pretending.
+- **Reynolds number** is the ratio of inertial to viscous forces, computed on the mean
+  aerodynamic chord. It is shown prominently on purpose — see the note below on what the
+  simulation can and cannot claim.
 
 ## A note on the numbers
 

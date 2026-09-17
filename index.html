@@ -36,6 +36,29 @@
         <p class="info-note">Dimensions are published figures.</p>
       </section>
 
+      <section id="controls" class="panel controls-panel" hidden>
+        <div class="speed-head">
+          <div class="speed-readout">
+            <span class="speed-value" id="speed-value">900</span>
+            <span class="speed-unit">km/h</span>
+          </div>
+          <button type="button" id="speed-cruise" class="chip">
+            Match cruise Mach
+          </button>
+        </div>
+        <input
+          type="range"
+          id="speed-slider"
+          class="speed-slider"
+          min="0"
+          max="1300"
+          step="10"
+          value="900"
+          aria-label="Tunnel airspeed in kilometres per hour"
+        />
+        <dl class="readouts" id="readouts"></dl>
+      </section>
+
       <div id="loading" class="loading" hidden><span></span>Building aircraft…</div>
 
       <footer class="hint">Drag to orbit &middot; scroll to zoom &middot; right-drag to pan</footer>

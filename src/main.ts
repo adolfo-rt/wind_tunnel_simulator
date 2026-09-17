@@ -3,7 +3,10 @@ import { Viewer } from './core/Viewer';
 import { DEFAULT_STATE, Store, type AppState } from './core/Store';
 import { SelectorPanel } from './ui/SelectorPanel';
 import { InfoPanel } from './ui/InfoPanel';
-import { Sphere, Vector3 } from 'three';
+import { Controls } from './ui/Controls';
+import { WindTunnel } from './tunnel/Tunnel';
+import { kmhToMs } from './core/atmosphere';
+import { Box3, Sphere, Vector3 } from 'three';
 import { buildAircraft, type BuiltAircraft } from './aircraft/AircraftBuilder';
 import { ROSTER, specById } from './aircraft/roster';
 import type { AircraftSpec } from './aircraft/AircraftSpec';
@@ -26,6 +29,26 @@ const infoPanel = new InfoPanel({
 const selector = new SelectorPanel({
   container: document.getElementById('aircraft-list') as HTMLElement,
   onSelect: (spec) => select(spec.id),
+});
+
+const tunnel = new WindTunnel();
+viewer.world.add(tunnel.group);
+
+const controls = new Controls({
+  panel: document.getElementById('controls') as HTMLElement,
+  slider: document.getElementById('speed-slider') as HTMLInputElement,
+  value: document.getElementById('speed-value') as HTMLElement,
+  cruiseButton: document.getElementById('speed-cruise') as HTMLButtonElement,
+  readouts: document.getElementById('readouts') as HTMLElement,
+  onSpeedChange: (kmh) => store.set({ speedKmh: kmh }),
+});
+
+store.subscribe((state) => tunnel.setSpeed(kmhToMs(state.speedKmh)));
+tunnel.setSpeed(kmhToMs(store.get().speedKmh));
+
+viewer.onFrame((delta, elapsed) => {
+  tunnel.update(delta);
+  controls.setRpm(tunnel.rpm, elapsed);
 });
 
 let current: BuiltAircraft | null = null;
@@ -64,9 +87,20 @@ async function load(spec: AircraftSpec): Promise<void> {
   viewer.world.add(built.group);
 
   const bounds = built.bounds.clone().translate(built.group.position);
-  viewer.frameBounds(bounds, true);
+  tunnel.fitTo(bounds);
+
+  // Frame the whole working section, so both fans are in shot. The aeroplane ends up
+  // smaller than it was on its own, which is the right trade for this stage: the tunnel
+  // and its fans are the subject, and the aircraft can be zoomed into.
+  const { radius, length } = tunnel.size;
+  const framing = new Box3(
+    new Vector3(-length / 2, -radius, -radius),
+    new Vector3(length / 2, radius, radius),
+  );
+  viewer.frameBounds(framing, true);
 
   infoPanel.show(spec);
+  controls.setAircraft(spec);
   selector.setActive(spec.id);
   store.set({ aircraftId: spec.id, building: false });
   loading.hidden = true;
