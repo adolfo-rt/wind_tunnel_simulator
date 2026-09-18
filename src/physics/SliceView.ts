@@ -10,6 +10,7 @@ import {
   type Texture,
 } from 'three';
 import { ATLAS_GLSL, type AtlasLayout } from './gpu/atlas';
+import { LEGEND_STOPS, REFERENCE_SPEED, SPEED_COLOUR_GLSL } from './gpu/colourRamp';
 
 /**
  * A cutting plane through the solved velocity field.
@@ -37,26 +38,6 @@ const SLICE_FRAGMENT = /* glsl */ `
 
   uniform vec3 uDomainMin;
   uniform vec3 uDomainSize;
-
-  /**
-   * Speed to colour.
-   *
-   * Deliberately not a rainbow. A perceptually ordered ramp means "brighter is faster"
-   * reads correctly, whereas a rainbow invents boundaries where the data is smooth.
-   * Free-stream speed sits in the middle, so slower-than-free-stream and faster-than
-   * are distinguishable at a glance, which is exactly what matters around a wing.
-   */
-  vec3 speedColour(float s) {
-    vec3 stalled = vec3(0.05, 0.10, 0.24);
-    vec3 slow    = vec3(0.13, 0.40, 0.72);
-    vec3 stream  = vec3(0.55, 0.75, 0.88);
-    vec3 fast    = vec3(0.98, 0.83, 0.42);
-    vec3 fastest = vec3(0.92, 0.35, 0.18);
-    if (s < 0.5) return mix(stalled, slow, s / 0.5);
-    if (s < 1.0) return mix(slow, stream, (s - 0.5) / 0.5);
-    if (s < 1.4) return mix(stream, fast, (s - 1.0) / 0.4);
-    return mix(fast, fastest, clamp((s - 1.4) / 0.6, 0.0, 1.0));
-  }
 
   void main() {
     vec3 cell = (vWorld - uDomainMin) / uDomainSize * uGrid;
@@ -94,7 +75,7 @@ export class SliceView {
     this.material = new ShaderMaterial({
       glslVersion: GLSL3,
       vertexShader: SLICE_VERTEX,
-      fragmentShader: ATLAS_GLSL + SLICE_FRAGMENT,
+      fragmentShader: ATLAS_GLSL + SPEED_COLOUR_GLSL + SLICE_FRAGMENT,
       transparent: true,
       depthWrite: false,
       side: DoubleSide,
@@ -152,16 +133,11 @@ export class SliceView {
     this.material.uniforms.uFade.value = Math.min(1, metresPerSecond / 6);
   }
 
-  /** Speed the colour ramp is anchored to, in m/s. Roughly the default cruise setting. */
-  static readonly REFERENCE_SPEED = 250;
+  /** Speed the colour ramp is anchored to, in m/s. Shared with the streamlines. */
+  static readonly REFERENCE_SPEED = REFERENCE_SPEED;
 
-  /**
-   * Where the ramp's colours sit, in m/s. The shader's stops are at 0, 0.5, 1.0, 1.4 and
-   * 2.0 times the reference, so these are the speeds the legend labels.
-   */
-  static readonly LEGEND_STOPS = [0, 0.5, 1.0, 1.4, 2.0].map(
-    (s) => s * SliceView.REFERENCE_SPEED,
-  );
+  /** Where the ramp's colours sit, in m/s, which is what the legend labels. */
+  static readonly LEGEND_STOPS = LEGEND_STOPS;
 
   setAxis(axis: SliceAxis): void {
     this.axis = axis;
