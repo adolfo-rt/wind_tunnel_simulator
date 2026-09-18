@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRotor } from '../src/tunnel/Fan';
+import { blurArcFor, buildRotor, Fan } from '../src/tunnel/Fan';
 
 /**
  * A fan blade's angular width is its chord divided by the local radius, which explodes
@@ -8,7 +8,7 @@ import { buildRotor } from '../src/tunnel/Fan';
  * shards rather than blades, so the width is capped and these tests hold it to that.
  */
 describe('wind tunnel rotor', () => {
-  const options = { radius: 20, x: 0, bladeCount: 11 };
+  const options = { radius: 20, x: 0, bladeCount: 7 };
   const SPAN_STEPS = 6;
   const VERTICES_PER_BLADE = (SPAN_STEPS + 1) * 2;
 
@@ -84,5 +84,104 @@ describe('wind tunnel rotor', () => {
     const reversed = buildRotor({ ...options, reversed: true });
     const firstX = (g: ReturnType<typeof buildRotor>) => g.getAttribute('position').getX(0);
     expect(Math.sign(firstX(forward))).toBe(-Math.sign(firstX(reversed)));
+  });
+});
+
+/**
+ * A rotor with N blades repeats every 2*pi/N, so at 60 fps its apparent rotation cannot
+ * exceed half that per frame. With eleven blades the fan visually tops out near 164 rpm
+ * and beyond that strobes, stops or runs backwards however fast the shaft really turns.
+ * Smearing the rotor across the arc it sweeps during a frame is what removes it.
+ */
+describe('rotor motion blur', () => {
+  const BLADES = 7;
+  const SPACING = (Math.PI * 2) / BLADES;
+
+  const spun = (metresPerSecond: number) => {
+    const fan = new Fan({ radius: 20, x: 0, bladeCount: BLADES });
+    fan.setSpeed(metresPerSecond);
+    // Long steps to reach the commanded speed, then one frame-sized step to set the smear.
+    for (let i = 0; i < 40; i++) fan.update(0.25);
+    fan.update(1 / 60);
+    return fan;
+  };
+
+  it('keeps the blades sharp when the fan is stopped', () => {
+    const fan = new Fan({ radius: 20, x: 0, bladeCount: BLADES });
+    fan.update(1 / 60);
+    expect(fan.blurCopies).toBe(1);
+    expect(fan.blurArc).toBe(0);
+    fan.dispose();
+  });
+
+  it('smears further as the fan speeds up', () => {
+    const slow = spun(20);
+    const medium = spun(80);
+    expect(medium.blurArc).toBeGreaterThan(slow.blurArc);
+    expect(medium.blurCopies).toBeGreaterThanOrEqual(slow.blurCopies);
+    slow.dispose();
+    medium.dispose();
+  });
+
+  it('covers a whole blade spacing once it is spinning fast', () => {
+    // Below this the image still has gaps between blades and can alias.
+    const fan = spun(250);
+    expect(fan.blurArc).toBeGreaterThanOrEqual(SPACING);
+    fan.dispose();
+  });
+
+  it('leaves no angular gap big enough to strobe, at any speed in range', () => {
+    for (const kmh of [100, 200, 300, 500, 700, 800, 900, 1100, 1300]) {
+      const fan = spun(kmh / 3.6);
+      // Where the blades land within one spacing decides what the eye sees, because
+      // every spacing looks alike.
+      const positions = fan.renderedAngles
+        .map((a) => ((a % SPACING) + SPACING) % SPACING)
+        .sort((x, y) => x - y);
+      let largestGap = positions[0] + (SPACING - positions[positions.length - 1]);
+      for (let i = 1; i < positions.length; i++) {
+        largestGap = Math.max(largestGap, positions[i] - positions[i - 1]);
+      }
+      // Either the fan turns slowly enough that a sharp image is unambiguous, or the
+      // smear has to cover the spacing evenly enough that consecutive frames match.
+      const perFrame = ((kmh / 3.6) * 0.18) / 60;
+      const unambiguous = perFrame < SPACING * 0.5;
+      if (!unambiguous) expect(largestGap).toBeLessThan(SPACING * 0.3);
+      fan.dispose();
+    }
+  });
+
+  it('opens the smear out before the pattern can start to strobe', () => {
+    const spacing = SPACING;
+    // Crisp while a frame's rotation is clearly unambiguous.
+    expect(blurArcFor(spacing * 0.2, spacing)).toBeLessThan(spacing * 0.35);
+    // Fully covering by the time it approaches the Nyquist limit of half a spacing.
+    expect(blurArcFor(spacing * 0.45, spacing)).toBeGreaterThanOrEqual(spacing);
+    expect(blurArcFor(spacing * 3, spacing)).toBeGreaterThanOrEqual(spacing);
+    // And widening monotonically in between, so a slider drag does not snap.
+    let previous = 0;
+    for (let i = 0; i <= 40; i++) {
+      const arc = blurArcFor(spacing * (i / 20), spacing);
+      expect(arc).toBeGreaterThanOrEqual(previous - 1e-9);
+      previous = arc;
+    }
+  });
+
+  it('never draws more copies than the budget allows', () => {
+    const fan = spun(400);
+    expect(fan.blurCopies).toBeLessThanOrEqual(12);
+    fan.dispose();
+  });
+
+  it('still advances the shaft at the commanded speed', () => {
+    // The blur changes how the rotor is drawn, not how fast it turns.
+    const fan = new Fan({ radius: 20, x: 0 });
+    fan.setSpeed(250);
+    for (let i = 0; i < 40; i++) fan.update(0.25);
+    const before = fan.shaftAngle;
+    fan.update(1);
+    const turned = Math.abs(fan.shaftAngle - before);
+    expect(turned).toBeCloseTo(250 * 0.18, 0);
+    fan.dispose();
   });
 });

@@ -129,6 +129,7 @@ declare global {
   interface Window {
     windTunnel: {
       viewer: Viewer;
+      tunnel: WindTunnel;
       store: Store<AppState>;
       select: (id: string) => void;
       current: () => BuiltAircraft | null;
@@ -140,6 +141,7 @@ declare global {
 
 window.windTunnel = {
   viewer,
+  tunnel,
   store,
   select,
   current: () => current,

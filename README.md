@@ -94,7 +94,17 @@ the surface turns away. Hoops and stringers give the eye something solid to judg
 tube by.
 
 The speed slider drives both rotors, eased so they spool up and down like machinery with
-rotating mass rather than snapping between speeds. The readouts underneath are the
+rotating mass rather than snapping between speeds.
+
+The rotors are motion blurred, and that is a correctness fix rather than a flourish. A
+rotor with N blades is periodic every 2*pi/N, so at 60 fps its apparent rotation cannot
+exceed half that per frame: with eleven blades the fan visually topped out near 164 rpm
+and beyond that strobed, stopped, or ran backwards no matter how fast the shaft really
+turned. The rotor is now drawn several times per frame across the arc it sweeps, which is
+what motion blur physically is - an exposure integrating over time. Once the smear covers
+a whole blade spacing the image is rotationally uniform and there is nothing left to
+alias. Seven blades turning at a few hundred rpm, rather than eleven at over a thousand,
+keeps the smear growing across the whole range of the slider. The readouts underneath are the
 interesting part:
 
 - **Mach** says whether compressibility is in play. The tunnel runs at sea level, so its
