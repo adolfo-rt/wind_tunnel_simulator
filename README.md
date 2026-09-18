@@ -140,6 +140,14 @@ A flow slice makes the field visible: a plane through the tunnel coloured by spe
 can be moved and reoriented. It is how the stage was checked before any streamlines
 existed to trace.
 
+Because the solved field is non-dimensional, the slice scales it by the tunnel's actual
+speed before colouring it, and the legend is in metres per second. Without that the
+picture would be identical with the fans stopped as at cruise — the field the solver holds
+is the same either way, and only the display knows how fast the air is really moving. The
+colour ramp is anchored to a fixed reference rather than to the current speed, which
+compresses the detail when the tunnel is running slowly. That is the honest trade: there
+genuinely is less happening.
+
 ### What it is and is not
 
 `npm run verify:flow` drives the built app in headless Chromium and asserts what must be

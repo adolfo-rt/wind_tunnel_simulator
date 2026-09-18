@@ -30,6 +30,7 @@ const SLICE_FRAGMENT = /* glsl */ `
   uniform sampler2D uVelocity;
   uniform float uOpacity;
   uniform float uScale;
+  uniform float uFade;
 
   in vec3 vWorld;
   out vec4 fragColor;
@@ -62,8 +63,12 @@ const SLICE_FRAGMENT = /* glsl */ `
     if (any(lessThan(cell, vec3(0.0))) || any(greaterThan(cell, uGrid))) discard;
 
     vec3 v = sampleAtlas(uVelocity, cell).xyz;
+    // The solved field is non-dimensional, with the free stream at exactly 1. Scaling
+    // by the tunnel's actual speed turns it back into metres per second, which is what
+    // makes the slice answer to the slider: with the fans stopped there is no flow, and
+    // the slice should say so rather than showing the shape of a flow that is not there.
     float speed = length(v) * uScale;
-    fragColor = vec4(speedColour(speed), uOpacity);
+    fragColor = vec4(speedColour(speed), uOpacity * uFade);
   }
 `;
 
@@ -102,6 +107,7 @@ export class SliceView {
         uDomainSize: { value: new Vector3(1, 1, 1) },
         uOpacity: { value: 0.92 },
         uScale: { value: 1 },
+        uFade: { value: 1 },
       },
     });
 
@@ -128,6 +134,34 @@ export class SliceView {
   setVelocity(texture: Texture | null): void {
     this.material.uniforms.uVelocity.value = texture;
   }
+
+  /**
+   * The tunnel's actual free-stream speed, which turns the solved field back into real
+   * units for display.
+   *
+   * The colour ramp is anchored to a fixed reference rather than to the current speed.
+   * Anchoring it to the current speed would keep the pattern maximally readable but make
+   * the picture identical at every setting, which is the thing being fixed here. A fixed
+   * anchor compresses the detail at low speed, which is honest: there genuinely is less
+   * happening.
+   */
+  setFreeStream(metresPerSecond: number): void {
+    this.material.uniforms.uScale.value = metresPerSecond / SliceView.REFERENCE_SPEED;
+    // Below a walking pace there is nothing worth looking at; fade out rather than
+    // leaving a flat dark rectangle across the tunnel.
+    this.material.uniforms.uFade.value = Math.min(1, metresPerSecond / 6);
+  }
+
+  /** Speed the colour ramp is anchored to, in m/s. Roughly the default cruise setting. */
+  static readonly REFERENCE_SPEED = 250;
+
+  /**
+   * Where the ramp's colours sit, in m/s. The shader's stops are at 0, 0.5, 1.0, 1.4 and
+   * 2.0 times the reference, so these are the speeds the legend labels.
+   */
+  static readonly LEGEND_STOPS = [0, 0.5, 1.0, 1.4, 2.0].map(
+    (s) => s * SliceView.REFERENCE_SPEED,
+  );
 
   setAxis(axis: SliceAxis): void {
     this.axis = axis;

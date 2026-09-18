@@ -46,7 +46,12 @@ const controls = new Controls({
   onSpeedChange: (kmh) => store.set({ speedKmh: kmh }),
 });
 
-store.subscribe((state) => tunnel.setSpeed(kmhToMs(state.speedKmh)));
+store.subscribe((state) => {
+  tunnel.setSpeed(kmhToMs(state.speedKmh));
+  // The solver runs non-dimensionally and never sees this; the slice needs it to turn
+  // the field back into metres per second.
+  slice.setFreeStream(kmhToMs(state.speedKmh));
+});
 tunnel.setSpeed(kmhToMs(store.get().speedKmh));
 
 // ---- Flow solver ------------------------------------------------------------
@@ -57,14 +62,32 @@ const slice = new SliceView();
 viewer.world.add(slice.mesh);
 
 const flowStatus = document.getElementById('flow-status') as HTMLElement;
+const legendTicks = document.getElementById('legend-ticks') as HTMLElement;
+const sliceLegend = document.getElementById('slice-legend') as HTMLElement;
+
+legendTicks.replaceChildren(
+  ...SliceView.LEGEND_STOPS.map((speed) => {
+    const tick = document.createElement('span');
+    tick.textContent = String(Math.round(speed));
+    return tick;
+  }),
+);
 const sliceEnabled = document.getElementById('slice-enabled') as HTMLInputElement;
 const slicePosition = document.getElementById('slice-position') as HTMLInputElement;
 const axisButtons = [...document.querySelectorAll<HTMLButtonElement>('.axis')];
 
 slice.setVisible(sliceEnabled.checked);
 slice.setPosition(Number(slicePosition.value) / 1000);
+slice.setFreeStream(kmhToMs(store.get().speedKmh));
 
-sliceEnabled.addEventListener('change', () => slice.setVisible(sliceEnabled.checked));
+const updateLegendVisibility = () => {
+  sliceLegend.hidden = !sliceEnabled.checked || !solver.supported;
+};
+
+sliceEnabled.addEventListener('change', () => {
+  slice.setVisible(sliceEnabled.checked);
+  updateLegendVisibility();
+});
 slicePosition.addEventListener('input', () =>
   slice.setPosition(Number(slicePosition.value) / 1000),
 );
@@ -88,6 +111,8 @@ for (const button of axisButtons) {
     recentreSlice();
   });
 }
+
+updateLegendVisibility();
 
 if (!solver.supported) {
   flowStatus.dataset.state = 'unsupported';
