@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Box3, Vector3 } from 'three';
+import { Box3, Vector3, type ShaderMaterial } from 'three';
 import { SliceView } from '../src/physics/SliceView';
 import { layoutAtlas } from '../src/physics/gpu/atlas';
 
@@ -77,7 +77,7 @@ describe('the slice answers to the tunnel speed', () => {
   };
 
   const uniforms = (slice: SliceView) =>
-    (slice.mesh.material as { uniforms: Record<string, { value: number }> }).uniforms;
+    (slice.mesh.material as ShaderMaterial).uniforms as Record<string, { value: number }>;
 
   it('scales the field by the free stream, so cruise reads as the reference', () => {
     const slice = fitted();
