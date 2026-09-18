@@ -42,7 +42,7 @@ The project is built in stages, each independently testable.
 | 1 | Aircraft selector and 3D viewer | Done |
 | 2 | Wind tunnel, fans, speed control | Done |
 | 3 | Flow field solver | Done |
-| 4 | Volumetric streamlines | Planned |
+| 4 | Volumetric streamlines | Done |
 | 5 | Surface pressure visualisation | Planned |
 | 6 | Turbulence and wake | Planned |
 | 7 | Performance and quality tiers | Planned |
@@ -131,13 +131,13 @@ than off the shape. The field is built in the aircraft's own frame and query poi
 transformed into it, so rotating the model costs a matrix multiply rather than a rebuild.
 
 Everything is solved non-dimensionally with the free stream at 1. The speed slider never
-reaches the solver; it scales the readouts and, from the next stage, how fast particles
-are carried. Besides being ordinary practice in computational aerodynamics, it fixes the
-CFL number, so dragging the slider from nothing to Mach 1 cannot destabilise the solve.
+reaches the solver; it scales the readouts and how fast the streamlines are carried.
+Besides being ordinary practice in computational aerodynamics, it fixes the CFL number, so
+dragging the slider from nothing to Mach 1 cannot destabilise the solve.
 Compressibility will arrive as an analytic correction rather than being simulated.
 
 A flow slice makes the field visible: a plane through the tunnel coloured by speed, which
-can be moved and reoriented. It is how the stage was checked before any streamlines
+can be moved and reoriented. It is how the solver was checked before any streamlines
 existed to trace.
 
 Because the solved field is non-dimensional, the slice scales it by the tunnel's actual
@@ -163,6 +163,44 @@ a real Reynolds number of 5 × 10⁷ — is not present at all. What the solver 
 single velocity and pressure field that every later stage reads from, so the streamlines,
 the surface colours, the wake and the force estimates agree with one another and all react
 to the actual shape of the aircraft.
+
+## The streamlines
+
+Up to sixteen thousand massless tracers, released across the whole inlet disc and carried
+by the solved field. Nothing about them is drawn from a second model: where a streamline
+bends it is because the pressure field bent the air there, and where they crowd together
+the air really is going faster, because the same volume is passing through a narrower gap.
+
+Three things about them are deliberate.
+
+**They are drawn at a twelfth of real time.** At cruise the air crosses this tunnel in
+about a third of a second, which no eye can follow — the streaks would be a blur with no
+direction in them. The factor is a constant, so doubling the tunnel speed still doubles
+how fast the tracers travel and the slider means what it says; and the colours are scaled
+back out to real airspeed before they reach the legend, which is the same legend the flow
+slice uses. The interface states the factor rather than leaving the animation to be
+misread by a factor of twelve.
+
+**They cannot pass through the aircraft.** The velocity inside a solid is zero, and on top
+of that every tracer is pushed back out along the distance field's own gradient if it ends
+a step inside the surface. `npm run verify:streamlines` asserts this by reading the
+positions back off the GPU and sampling the same distance field the solver uses — the one
+failure a screenshot would never show.
+
+**Step length is watched, because this stage has the same sampling trap the fans had.** A
+tracer that covers most of a cell in one step draws a chord across whatever it is flowing
+around, and near a wing that chord goes through the wing. So each frame's travel is split
+into as many integration steps as it takes to keep every one under about a third of a
+cell, and on a slow frame the trail is sampled more than once so the line drawn through
+the path stays on it too. Both limits are asserted rather than eyeballed.
+
+Seeding is deterministic: a fixed sunflower spiral across the inlet, so a tracer retraces
+the same streamline every time it restarts and the picture is a stable set of lines you
+can watch change as the aircraft or the speed changes, rather than a cloud that reshuffles
+faster than the thing it is showing. The first release is staggered along the tunnel by a
+radical-inverse sequence — a golden-ratio one, which would have matched the seeding,
+turned out to be the golden angle's own sequence reflected, and the tracers came out as a
+spiral sheet sweeping down the tunnel instead of an even field.
 
 ## A note on the numbers
 
@@ -193,13 +231,15 @@ The suite checks the airfoil generator against the published NACA 0012 ordinate 
 validates every aircraft in the roster for physical plausibility, and builds all 21
 aircraft checking that the geometry is finite, correctly wound and watertight.
 
-There are also two scripts that drive the built app in headless Chromium, for checking a
-stage without a person in the loop:
+There are also scripts that drive the built app in headless Chromium, for checking a stage
+without a person in the loop:
 
 ```bash
 npm run build && npm run preview
 npm run shots  -- comet1 boeing747-100 concorde   # three-quarter views
 npm run views  -- boeing747-100                   # side, top and front views
+npm run verify:flow                               # physics of the solved field
+npm run verify:streamlines                        # physics of the tracers
 ```
 
 ## Layout
@@ -208,7 +248,9 @@ npm run views  -- boeing747-100                   # side, top and front views
 src/
   aircraft/     specs, roster, airfoil maths, geometry builders
   core/         renderer, camera, shared state
+  physics/      flow solver, streamlines, distance fields, GPU passes
+  tunnel/       working section, fans
   ui/           selector, info card, styles
-scripts/        roster generator, headless screenshot tools
+scripts/        roster generator, headless screenshot and verification tools
 tests/          unit tests
 ```

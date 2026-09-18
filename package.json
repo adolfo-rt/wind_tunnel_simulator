@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "shots": "node scripts/shoot.mjs",
     "views": "node scripts/views.mjs",
-    "verify:flow": "node scripts/verify-flow.mjs"
+    "verify:flow": "node scripts/verify-flow.mjs",
+    "verify:streamlines": "node scripts/verify-streamlines.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"
