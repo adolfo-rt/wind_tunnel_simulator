@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "shots": "node scripts/shoot.mjs",
-    "views": "node scripts/views.mjs"
+    "views": "node scripts/views.mjs",
+    "verify:flow": "node scripts/verify-flow.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

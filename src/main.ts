@@ -6,6 +6,9 @@ import { InfoPanel } from './ui/InfoPanel';
 import { Controls } from './ui/Controls';
 import { WindTunnel } from './tunnel/Tunnel';
 import { kmhToMs } from './core/atmosphere';
+import { FlowSolver } from './physics/FlowSolver';
+import { SliceView, type SliceAxis } from './physics/SliceView';
+import { SdfBuilder } from './physics/sdf/SdfBuilder';
 import { Box3, Sphere, Vector3 } from 'three';
 import { buildAircraft, type BuiltAircraft } from './aircraft/AircraftBuilder';
 import { ROSTER, specById } from './aircraft/roster';
@@ -46,10 +49,57 @@ const controls = new Controls({
 store.subscribe((state) => tunnel.setSpeed(kmhToMs(state.speedKmh)));
 tunnel.setSpeed(kmhToMs(store.get().speedKmh));
 
+// ---- Flow solver ------------------------------------------------------------
+
+const solver = new FlowSolver({ renderer: viewer.renderer });
+const sdfBuilder = new SdfBuilder();
+const slice = new SliceView();
+viewer.world.add(slice.mesh);
+
+const flowStatus = document.getElementById('flow-status') as HTMLElement;
+const sliceEnabled = document.getElementById('slice-enabled') as HTMLInputElement;
+const slicePosition = document.getElementById('slice-position') as HTMLInputElement;
+const axisButtons = [...document.querySelectorAll<HTMLButtonElement>('.axis')];
+
+slice.setVisible(sliceEnabled.checked);
+slice.setPosition(Number(slicePosition.value) / 1000);
+
+sliceEnabled.addEventListener('change', () => slice.setVisible(sliceEnabled.checked));
+slicePosition.addEventListener('input', () =>
+  slice.setPosition(Number(slicePosition.value) / 1000),
+);
+for (const button of axisButtons) {
+  button.addEventListener('click', () => {
+    for (const other of axisButtons) other.setAttribute('aria-pressed', String(other === button));
+    slice.setAxis(button.dataset.axis as SliceAxis);
+  });
+}
+
+if (!solver.supported) {
+  flowStatus.dataset.state = 'unsupported';
+  flowStatus.textContent = `Flow solver unavailable: ${solver.unsupportedReason}. An analytic model arrives in stage 7.`;
+  sliceEnabled.disabled = true;
+  slicePosition.disabled = true;
+}
+
 viewer.onFrame((delta, elapsed) => {
   tunnel.update(delta);
   controls.setRpm(tunnel.rpm, elapsed);
+
+  if (solver.supported && current) {
+    solver.step();
+    slice.setVelocity(solver.velocityTexture);
+    if (elapsed - lastStatusPaint > 0.25) {
+      lastStatusPaint = elapsed;
+      const { grid, cells, jacobiIterations, steps } = solver.stats;
+      flowStatus.textContent =
+        `${grid.x}×${grid.y}×${grid.z} cells (${(cells / 1000).toFixed(0)}k) · ` +
+        `${jacobiIterations} pressure iterations · ${steps} steps`;
+    }
+  }
 });
+
+let lastStatusPaint = 0;
 
 let current: BuiltAircraft | null = null;
 let pendingId: string | null = null;
@@ -101,6 +151,36 @@ async function load(spec: AircraftSpec): Promise<void> {
 
   infoPanel.show(spec);
   controls.setAircraft(spec);
+
+  // Hand the aircraft to the solver: size the grid to the working section, then build
+  // the obstacle field off-thread and drop it in when it is ready.
+  if (solver.supported) {
+    const domain = new Box3(
+      new Vector3(-length / 2, -radius, -radius),
+      new Vector3(length / 2, radius, radius),
+    );
+    solver.configure(domain, viewer.renderer.capabilities.maxTextureSize);
+    slice.configure(domain, solver.atlas, solver.velocityTexture);
+
+    built.group.updateMatrixWorld(true);
+    solver.setModelMatrix(built.group.matrixWorld);
+    solver.setObstacle(null);
+    flowStatus.textContent = 'Building the obstacle field…';
+
+    sdfBuilder
+      .build(built.solid, { resolution: 96 })
+      .then((sdf) => {
+        if (current !== built) return;
+        solver.setObstacle(sdf);
+        solver.reset();
+      })
+      .catch((error: unknown) => {
+        // A superseded build is the normal case when clicking down the list.
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        flowStatus.dataset.state = 'unsupported';
+        flowStatus.textContent = 'Could not build the obstacle field.';
+      });
+  }
   selector.setActive(spec.id);
   store.set({ aircraftId: spec.id, building: false });
   loading.hidden = true;
@@ -130,6 +210,8 @@ declare global {
     windTunnel: {
       viewer: Viewer;
       tunnel: WindTunnel;
+      solver: FlowSolver;
+      slice: SliceView;
       store: Store<AppState>;
       select: (id: string) => void;
       current: () => BuiltAircraft | null;
@@ -142,6 +224,8 @@ declare global {
 window.windTunnel = {
   viewer,
   tunnel,
+  solver,
+  slice,
   store,
   select,
   current: () => current,

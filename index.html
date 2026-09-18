@@ -57,6 +57,31 @@
           aria-label="Tunnel airspeed in kilometres per hour"
         />
         <dl class="readouts" id="readouts"></dl>
+
+        <div class="flow-controls" id="flow-controls">
+          <div class="flow-head">
+            <label class="switch">
+              <input type="checkbox" id="slice-enabled" checked />
+              <span>Flow slice</span>
+            </label>
+            <div class="axis-group" role="group" aria-label="Slice orientation">
+              <button type="button" class="axis" data-axis="z" aria-pressed="true">Span</button>
+              <button type="button" class="axis" data-axis="y" aria-pressed="false">Plan</button>
+              <button type="button" class="axis" data-axis="x" aria-pressed="false">Cross</button>
+            </div>
+          </div>
+          <input
+            type="range"
+            id="slice-position"
+            class="speed-slider slice-slider"
+            min="0"
+            max="1000"
+            step="1"
+            value="440"
+            aria-label="Position of the flow slice"
+          />
+          <p class="flow-status" id="flow-status">Solver starting…</p>
+        </div>
       </section>
 
       <div id="loading" class="loading" hidden><span></span>Building aircraft…</div>

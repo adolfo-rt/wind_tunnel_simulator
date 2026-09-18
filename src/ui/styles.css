@@ -365,3 +365,95 @@ html, body {
   background: transparent;
 }
 .chip:disabled:hover { background: transparent; color: var(--text-dim); }
+
+/* ---- Flow controls ------------------------------------------------------ */
+
+.flow-controls {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.flow-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 28px;
+  height: 16px;
+  margin: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  position: relative;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.switch input::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #cdd6e0;
+  transition: transform 140ms ease;
+}
+
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { transform: translateX(12px); background: #fff; }
+.switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.axis-group { display: flex; gap: 3px; }
+
+.axis {
+  padding: 4px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.axis:hover { color: var(--text-dim); background: rgba(255, 255, 255, 0.05); }
+.axis[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: rgba(77, 163, 255, 0.4);
+  color: var(--text);
+}
+.axis:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.slice-slider {
+  margin-bottom: 9px;
+  background: linear-gradient(90deg, #1b2740 0%, #3a5f8c 45%, #8fb6d8 100%);
+}
+
+.flow-status {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.flow-status[data-state='unsupported'] { color: #e0a86a; }

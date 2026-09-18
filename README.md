@@ -41,7 +41,7 @@ The project is built in stages, each independently testable.
 |---|---|---|
 | 1 | Aircraft selector and 3D viewer | Done |
 | 2 | Wind tunnel, fans, speed control | Done |
-| 3 | Flow field solver | Planned |
+| 3 | Flow field solver | Done |
 | 4 | Volumetric streamlines | Planned |
 | 5 | Surface pressure visualisation | Planned |
 | 6 | Turbulence and wake | Planned |
@@ -115,6 +115,46 @@ interesting part:
 - **Reynolds number** is the ratio of inertial to viscous forces, computed on the mean
   aerodynamic chord. It is shown prominently on purpose — see the note below on what the
   simulation can and cannot claim.
+
+## The flow solver
+
+Incompressible Navier–Stokes on a regular grid: move the velocity field along itself,
+then find the pressure whose gradient cancels whatever divergence that introduced. The
+grid is flattened into a 2D texture, its z slices tiled across it, so each pass is a
+single full-screen draw — WebGL2 cannot render into one slice of a 3D texture without a
+geometry shader it does not have.
+
+The aircraft enters as a signed distance field built in a worker. Cells can be partly
+solid, which is what keeps the surface smooth at a resolution where a hard in-or-out test
+would make every boundary a staircase and the flow would separate off the steps rather
+than off the shape. The field is built in the aircraft's own frame and query points are
+transformed into it, so rotating the model costs a matrix multiply rather than a rebuild.
+
+Everything is solved non-dimensionally with the free stream at 1. The speed slider never
+reaches the solver; it scales the readouts and, from the next stage, how fast particles
+are carried. Besides being ordinary practice in computational aerodynamics, it fixes the
+CFL number, so dragging the slider from nothing to Mach 1 cannot destabilise the solve.
+Compressibility will arrive as an analytic correction rather than being simulated.
+
+A flow slice makes the field visible: a plane through the tunnel coloured by speed, which
+can be moved and reoriented. It is how the stage was checked before any streamlines
+existed to trace.
+
+### What it is and is not
+
+`npm run verify:flow` drives the built app in headless Chromium and asserts what must be
+true of flow around a body: the free stream arrives undisturbed, it accelerates somewhere,
+it slows markedly behind the aircraft, and momentum is not quietly draining away. Each of
+those failed at some point during development, which is why they are checks rather than
+claims.
+
+What it is not is a resolved simulation. At 128 cells along the tunnel a 737's fuselage is
+about four cells across and its wing is thinner than one, so the wing's section is
+suggested rather than resolved. The boundary layer — a hundred-thousandth of the chord at
+a real Reynolds number of 5 × 10⁷ — is not present at all. What the solver does give is a
+single velocity and pressure field that every later stage reads from, so the streamlines,
+the surface colours, the wake and the force estimates agree with one another and all react
+to the actual shape of the aircraft.
 
 ## A note on the numbers
 
