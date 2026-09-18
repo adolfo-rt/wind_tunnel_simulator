@@ -201,6 +201,35 @@ export class FlowSolver {
     return this.layout;
   }
 
+  /**
+   * Names of the uniforms that describe the grid, the domain and the obstacle.
+   *
+   * Anything else that reads the field has to agree with the solver about all of this
+   * exactly. A streamline pushed out of an aircraft sitting a metre from where the solver
+   * thinks it is would be worse than no push-out at all.
+   */
+  private static readonly SHARED_UNIFORMS = [
+    'uGrid', 'uTiles', 'uTexSize',
+    'uSdf', 'uSdfGrid', 'uSdfTiles', 'uSdfTexSize', 'uSdfOrigin', 'uSdfCell', 'uSdfBand',
+    'uHasObstacle', 'uInvModel',
+    'uDomainMin', 'uDomainSize', 'uCellWorld',
+  ];
+
+  /**
+   * Let another material read the solver's world.
+   *
+   * The uniform objects themselves are shared, not copied, so every later change - a new
+   * aircraft, a new grid size, a rotated model - reaches the borrower with nothing having
+   * to remember to forward it. The velocity and pressure textures are deliberately not on
+   * the list: the solver reassigns those to intermediate buffers as it works through a
+   * step, and a borrower wants the finished field.
+   */
+  shareUniforms(material: ShaderMaterial): void {
+    for (const name of FlowSolver.SHARED_UNIFORMS) {
+      if (material.uniforms[name]) material.uniforms[name] = this.advect.uniforms[name];
+    }
+  }
+
   get domain(): Box3 {
     return this.domainBox;
   }

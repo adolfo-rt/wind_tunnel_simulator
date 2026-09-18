@@ -22,7 +22,7 @@ export const VERTEX_SHADER = /* glsl */ `
 `;
 
 /** Obstacle lookup shared by every pass that needs to know where the aircraft is. */
-const OBSTACLE_GLSL = /* glsl */ `
+export const OBSTACLE_GLSL = /* glsl */ `
   uniform sampler2D uSdf;
   uniform vec3 uSdfGrid;
   uniform vec2 uSdfTiles;
@@ -46,13 +46,25 @@ const OBSTACLE_GLSL = /* glsl */ `
   /// The field is built once in the aircraft's own frame and the query point is
   /// transformed into it, so pitching or yawing the model costs a matrix multiply rather
   /// than a rebuild.
-  float solidDistance(vec3 cell) {
+  float solidDistanceWorld(vec3 world) {
     if (uHasObstacle < 0.5) return uSdfBand;
-    vec3 world = cellToWorld(cell);
     vec3 object = (uInvModel * vec4(world, 1.0)).xyz;
     vec3 p = (object - uSdfOrigin) / uSdfCell + 0.5;
     if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, uSdfGrid))) return uSdfBand;
     return sampleAtlasOf(uSdf, p, uSdfGrid, uSdfTiles, uSdfTexSize).r;
+  }
+
+  float solidDistance(vec3 cell) {
+    return solidDistanceWorld(cellToWorld(cell));
+  }
+
+  /// Which way is out. Undefined far from the surface, where nothing asks.
+  vec3 solidNormalWorld(vec3 world, float h) {
+    return normalize(vec3(
+      solidDistanceWorld(world + vec3(h, 0.0, 0.0)) - solidDistanceWorld(world - vec3(h, 0.0, 0.0)),
+      solidDistanceWorld(world + vec3(0.0, h, 0.0)) - solidDistanceWorld(world - vec3(0.0, h, 0.0)),
+      solidDistanceWorld(world + vec3(0.0, 0.0, h)) - solidDistanceWorld(world - vec3(0.0, 0.0, h))
+    ) + vec3(1e-6, 0.0, 0.0));
   }
 
   /// How much of a cell the aircraft occupies, 0 clear and 1 solid.
