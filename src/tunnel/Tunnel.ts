@@ -48,6 +48,16 @@ const MIN_LENGTH_SPAN_FACTOR = 1.5;
  * the aeroplane would sit lost in the middle of it.
  */
 const MAX_LENGTH_DIAMETER_FACTOR = 3.2;
+/**
+ * Extra length on top of whatever the aircraft itself calls for, so the fans sit well
+ * clear of the model rather than crowding it.
+ *
+ * Applied after the other three so it holds whichever of them is binding. The working
+ * section stays centred on the aircraft, so this lands half upstream and half
+ * downstream. Later stages benefit too: the extra room downstream is where the wake
+ * gets to develop before it reaches the outlet.
+ */
+const FAN_CLEARANCE = 1.2;
 
 export interface TunnelDimensions {
   radius: number;
@@ -149,10 +159,11 @@ export class WindTunnel {
     const size = bounds.getSize(new Vector3());
     const crossExtent = Math.max(size.z, size.y) / 2;
     const radius = crossExtent * WALL_CLEARANCE;
-    const length = Math.min(
-      Math.max(size.x * LENGTH_FACTOR, size.z * MIN_LENGTH_SPAN_FACTOR),
-      radius * 2 * MAX_LENGTH_DIAMETER_FACTOR,
-    );
+    const length =
+      Math.min(
+        Math.max(size.x * LENGTH_FACTOR, size.z * MIN_LENGTH_SPAN_FACTOR),
+        radius * 2 * MAX_LENGTH_DIAMETER_FACTOR,
+      ) * FAN_CLEARANCE;
     this.dimensions = { radius, length };
     this.rebuild();
   }
