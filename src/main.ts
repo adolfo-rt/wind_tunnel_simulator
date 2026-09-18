@@ -68,10 +68,24 @@ sliceEnabled.addEventListener('change', () => slice.setVisible(sliceEnabled.chec
 slicePosition.addEventListener('input', () =>
   slice.setPosition(Number(slicePosition.value) / 1000),
 );
+/**
+ * The domain is centred on the aircraft, so the middle of the slider is the aircraft's
+ * own centreline - the cut worth seeing most of the time. Picking an orientation returns
+ * there, and so does clicking the orientation already selected, which makes the buttons
+ * double as a way back to the middle after exploring.
+ */
+const SLICE_CENTRE = 0.5;
+
+function recentreSlice(): void {
+  slicePosition.value = String(Math.round(SLICE_CENTRE * Number(slicePosition.max)));
+  slice.setPosition(SLICE_CENTRE);
+}
+
 for (const button of axisButtons) {
   button.addEventListener('click', () => {
     for (const other of axisButtons) other.setAttribute('aria-pressed', String(other === button));
     slice.setAxis(button.dataset.axis as SliceAxis);
+    recentreSlice();
   });
 }
 

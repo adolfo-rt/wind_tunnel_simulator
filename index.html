@@ -65,9 +65,33 @@
               <span>Flow slice</span>
             </label>
             <div class="axis-group" role="group" aria-label="Slice orientation">
-              <button type="button" class="axis" data-axis="z" aria-pressed="true">Span</button>
-              <button type="button" class="axis" data-axis="y" aria-pressed="false">Plan</button>
-              <button type="button" class="axis" data-axis="x" aria-pressed="false">Cross</button>
+              <button
+                type="button"
+                class="axis"
+                data-axis="z"
+                aria-pressed="true"
+                title="Slice along the span. Click to recentre."
+              >
+                Span
+              </button>
+              <button
+                type="button"
+                class="axis"
+                data-axis="y"
+                aria-pressed="false"
+                title="Slice in plan. Click to recentre."
+              >
+                Plan
+              </button>
+              <button
+                type="button"
+                class="axis"
+                data-axis="x"
+                aria-pressed="false"
+                title="Slice across the tunnel. Click to recentre."
+              >
+                Cross
+              </button>
             </div>
           </div>
           <input
@@ -77,7 +101,7 @@
             min="0"
             max="1000"
             step="1"
-            value="440"
+            value="500"
             aria-label="Position of the flow slice"
           />
           <p class="flow-status" id="flow-status">Solver starting…</p>
