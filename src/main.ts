@@ -8,7 +8,14 @@ import { WindTunnel } from './tunnel/Tunnel';
 import { kmhToMs } from './core/atmosphere';
 import { FlowSolver } from './physics/FlowSolver';
 import { SliceView, type SliceAxis } from './physics/SliceView';
+import {
+  SLOW_MOTION,
+  STREAMLINE_COUNTS,
+  Streamlines,
+  type StreamlineDensity,
+} from './physics/Streamlines';
 import { SdfBuilder } from './physics/sdf/SdfBuilder';
+import { sampleSdf, type SdfGrid } from './physics/sdf/buildSdf';
 import { Box3, Sphere, Vector3 } from 'three';
 import { buildAircraft, type BuiltAircraft } from './aircraft/AircraftBuilder';
 import { ROSTER, specById } from './aircraft/roster';
@@ -48,9 +55,11 @@ const controls = new Controls({
 
 store.subscribe((state) => {
   tunnel.setSpeed(kmhToMs(state.speedKmh));
-  // The solver runs non-dimensionally and never sees this; the slice needs it to turn
-  // the field back into metres per second.
+  // The solver runs non-dimensionally and never sees this. Everything drawn from its
+  // field does: the slice turns it back into metres per second, and the streamlines use
+  // it to decide how far a particle travels.
   slice.setFreeStream(kmhToMs(state.speedKmh));
+  streamlines.setFreeStream(kmhToMs(state.speedKmh));
 });
 tunnel.setSpeed(kmhToMs(store.get().speedKmh));
 
@@ -60,6 +69,13 @@ const solver = new FlowSolver({ renderer: viewer.renderer });
 const sdfBuilder = new SdfBuilder();
 const slice = new SliceView();
 viewer.world.add(slice.mesh);
+
+const streamlines = new Streamlines({ renderer: viewer.renderer });
+viewer.world.add(streamlines.group);
+// The streamlines have to agree with the solver about the grid, the domain and where the
+// aircraft is, down to the metre. Borrowing the uniforms rather than copying them means
+// they cannot fall out of step later.
+for (const material of streamlines.sharedMaterials) solver.shareUniforms(material);
 
 const flowStatus = document.getElementById('flow-status') as HTMLElement;
 const legendTicks = document.getElementById('legend-ticks') as HTMLElement;
@@ -74,14 +90,25 @@ legendTicks.replaceChildren(
 );
 const sliceEnabled = document.getElementById('slice-enabled') as HTMLInputElement;
 const slicePosition = document.getElementById('slice-position') as HTMLInputElement;
-const axisButtons = [...document.querySelectorAll<HTMLButtonElement>('.axis')];
+const axisButtons = [...document.querySelectorAll<HTMLButtonElement>('#slice-axes .axis')];
+const streamlinesEnabled = document.getElementById('streamlines-enabled') as HTMLInputElement;
+const streamlineNote = document.getElementById('streamline-note') as HTMLElement;
+const densityButtons = [
+  ...document.querySelectorAll<HTMLButtonElement>('#streamline-density .axis'),
+];
 
 slice.setVisible(sliceEnabled.checked);
 slice.setPosition(Number(slicePosition.value) / 1000);
 slice.setFreeStream(kmhToMs(store.get().speedKmh));
 
+/**
+ * One legend for both. The streamlines and the slice are coloured from the same field
+ * through the same ramp, so the bar means the same thing for either, and it should be
+ * there whenever there is something on screen to read it against.
+ */
 const updateLegendVisibility = () => {
-  sliceLegend.hidden = !sliceEnabled.checked || !solver.supported;
+  const showing = sliceEnabled.checked || streamlinesEnabled.checked;
+  sliceLegend.hidden = !showing || !solver.supported;
 };
 
 sliceEnabled.addEventListener('change', () => {
@@ -114,11 +141,59 @@ for (const button of axisButtons) {
 
 updateLegendVisibility();
 
+// ---- Streamlines ------------------------------------------------------------
+
+let density: StreamlineDensity = 'medium';
+
+/**
+ * Say what the picture is doing.
+ *
+ * The slow motion is the one thing on screen that is not a property of the flow, and
+ * leaving it unstated would make every reading of the animation wrong by a factor of
+ * twelve. The count is here because it is the main thing to turn down on a slow machine.
+ */
+function describeStreamlines(): void {
+  streamlineNote.textContent = streamlinesEnabled.checked
+    ? `${streamlines.particleCount.toLocaleString()} tracers, drawn at 1/${SLOW_MOTION} real time.`
+    : '';
+}
+
+streamlines.setVisible(streamlinesEnabled.checked);
+streamlines.setFreeStream(kmhToMs(store.get().speedKmh));
+
+streamlinesEnabled.addEventListener('change', () => {
+  streamlines.setVisible(streamlinesEnabled.checked);
+  updateLegendVisibility();
+  // Restart rather than resume: the trails would otherwise be stitched across however
+  // long they were switched off, drawing lines the air never took.
+  if (streamlinesEnabled.checked) streamlines.reset();
+  describeStreamlines();
+});
+
+for (const button of densityButtons) {
+  button.addEventListener('click', () => {
+    for (const other of densityButtons) {
+      other.setAttribute('aria-pressed', String(other === button));
+    }
+    density = button.dataset.density as StreamlineDensity;
+    streamlines.setCount(STREAMLINE_COUNTS[density], tunnel.size.radius);
+    describeStreamlines();
+  });
+}
+
+describeStreamlines();
+updateLegendVisibility();
+
 if (!solver.supported) {
   flowStatus.dataset.state = 'unsupported';
   flowStatus.textContent = `Flow solver unavailable: ${solver.unsupportedReason}. An analytic model arrives in stage 7.`;
   sliceEnabled.disabled = true;
   slicePosition.disabled = true;
+  streamlinesEnabled.disabled = true;
+  streamlines.setVisible(false);
+  for (const button of densityButtons) button.disabled = true;
+  streamlineNote.textContent = '';
+  updateLegendVisibility();
 }
 
 viewer.onFrame((delta, elapsed) => {
@@ -127,7 +202,11 @@ viewer.onFrame((delta, elapsed) => {
 
   if (solver.supported && current) {
     solver.step();
+    // The solver ping-pongs its targets, so the finished field is a different texture
+    // each step and has to be handed over again rather than bound once.
     slice.setVelocity(solver.velocityTexture);
+    streamlines.setVelocity(solver.velocityTexture);
+    streamlines.step(delta);
     if (elapsed - lastStatusPaint > 0.25) {
       lastStatusPaint = elapsed;
       const { grid, cells, jacobiIterations, steps } = solver.stats;
@@ -141,6 +220,8 @@ viewer.onFrame((delta, elapsed) => {
 let lastStatusPaint = 0;
 
 let current: BuiltAircraft | null = null;
+/** Kept so the streamlines can be checked against the same surface the solver sees. */
+let obstacle: SdfGrid | null = null;
 let pendingId: string | null = null;
 
 /** Wait for the browser to paint, so the loading indicator is actually seen. */
@@ -198,12 +279,16 @@ async function load(spec: AircraftSpec): Promise<void> {
       new Vector3(-length / 2, -radius, -radius),
       new Vector3(length / 2, radius, radius),
     );
-    solver.configure(domain, viewer.renderer.capabilities.maxTextureSize);
+    const maxTexture = viewer.renderer.capabilities.maxTextureSize;
+    solver.configure(domain, maxTexture);
     slice.configure(domain, solver.atlas, solver.velocityTexture);
+    streamlines.configure(domain, solver.velocityTexture, radius, maxTexture);
+    describeStreamlines();
 
     built.group.updateMatrixWorld(true);
     solver.setModelMatrix(built.group.matrixWorld);
     solver.setObstacle(null);
+    obstacle = null;
     flowStatus.textContent = 'Building the obstacle field…';
 
     sdfBuilder
@@ -211,7 +296,10 @@ async function load(spec: AircraftSpec): Promise<void> {
       .then((sdf) => {
         if (current !== built) return;
         solver.setObstacle(sdf);
+        obstacle = sdf;
         solver.reset();
+        // Particles released before the aircraft existed are inside it now.
+        streamlines.reset();
       })
       .catch((error: unknown) => {
         // A superseded build is the normal case when clicking down the list.
@@ -251,7 +339,18 @@ declare global {
       tunnel: WindTunnel;
       solver: FlowSolver;
       slice: SliceView;
+      streamlines: Streamlines;
+      /** How much slower than real time the streamlines are drawn. */
+      slowMotion: number;
       store: Store<AppState>;
+      /**
+       * Distance from a world point to the aircraft's surface, negative inside.
+       *
+       * The same field the solver and the streamlines use, read from the outside so a
+       * headless check can assert that no particle is inside the aeroplane — which is
+       * not something a screenshot can settle.
+       */
+      distanceToAircraft: (x: number, y: number, z: number) => number | null;
       select: (id: string) => void;
       current: () => BuiltAircraft | null;
       /** Point the camera down one axis at the current aircraft. */
@@ -265,8 +364,15 @@ window.windTunnel = {
   tunnel,
   solver,
   slice,
+  streamlines,
+  slowMotion: SLOW_MOTION,
   store,
   select,
+  distanceToAircraft: (x, y, z) => {
+    if (!obstacle || !current) return null;
+    const local = current.group.worldToLocal(new Vector3(x, y, z));
+    return sampleSdf(obstacle, local.x, local.y, local.z);
+  },
   current: () => current,
   view: (which) => {
     if (!current) return;

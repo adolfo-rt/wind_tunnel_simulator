@@ -61,10 +61,39 @@
         <div class="flow-controls" id="flow-controls">
           <div class="flow-head">
             <label class="switch">
-              <input type="checkbox" id="slice-enabled" checked />
+              <input type="checkbox" id="streamlines-enabled" checked />
+              <span>Streamlines</span>
+            </label>
+            <div
+              class="axis-group"
+              id="streamline-density"
+              role="group"
+              aria-label="Number of streamlines"
+            >
+              <button type="button" class="axis" data-density="low" aria-pressed="false">
+                1k
+              </button>
+              <button type="button" class="axis" data-density="medium" aria-pressed="true">
+                4k
+              </button>
+              <button type="button" class="axis" data-density="high" aria-pressed="false">
+                16k
+              </button>
+            </div>
+          </div>
+          <p class="flow-note" id="streamline-note"></p>
+
+          <div class="flow-head">
+            <label class="switch">
+              <input type="checkbox" id="slice-enabled" />
               <span>Flow slice</span>
             </label>
-            <div class="axis-group" role="group" aria-label="Slice orientation">
+            <div
+              class="axis-group"
+              id="slice-axes"
+              role="group"
+              aria-label="Slice orientation"
+            >
               <button
                 type="button"
                 class="axis"
@@ -107,7 +136,7 @@
           <div class="legend" id="slice-legend">
             <div class="legend-bar"></div>
             <div class="legend-ticks" id="legend-ticks"></div>
-            <p class="legend-caption">Local airspeed, m/s</p>
+            <p class="legend-caption">Local airspeed, m/s — streamlines and slice alike</p>
           </div>
           <p class="flow-status" id="flow-status">Solver starting…</p>
         </div>

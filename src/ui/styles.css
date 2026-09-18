@@ -448,6 +448,13 @@ html, body {
   background: linear-gradient(90deg, #1b2740 0%, #3a5f8c 45%, #8fb6d8 100%);
 }
 
+.flow-note {
+  margin: 0 0 11px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
 .flow-status {
   margin: 0;
   font-size: 10.5px;
