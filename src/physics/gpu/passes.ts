@@ -113,6 +113,8 @@ export const ADVECT_SHADER = HEADER + ATLAS_GLSL + OBSTACLE_GLSL + /* glsl */ `
  */
 export const CONSTRAIN_SHADER = HEADER + ATLAS_GLSL + OBSTACLE_GLSL + /* glsl */ `
   uniform sampler2D uVelocity;
+  /// 0 brings the air to rest on the aircraft, 1 lets it slide along the surface.
+  uniform float uWallSlip;
 
   void main() {
     vec3 cell = fragmentCell();
@@ -120,10 +122,22 @@ export const CONSTRAIN_SHADER = HEADER + ATLAS_GLSL + OBSTACLE_GLSL + /* glsl */
 
     vec3 v = readCell(uVelocity, cell).xyz;
 
-    // The aircraft. A partly solid cell is slowed in proportion, which is what makes a
-    // coarse grid produce a smooth surface rather than a staircase.
     float solid = solidity(cell);
-    v = mix(v, vec3(0.0), solid);
+    if (uWallSlip > 0.5) {
+      // Inviscid wall: take out the flow through the surface and leave the air free to
+      // slide along it. This is the condition panel methods use, and it is what makes a
+      // surface pressure meaningful on a grid this coarse - see the note in
+      // surface/cp.ts on why a no-slip wall here grows a boundary layer metres thick.
+      vec3 n = solidNormalWorld(cellToWorld(cell), uCellWorld * 0.5);
+      v = mix(v, v - n * dot(v, n), solid);
+      // Well inside the body there is nothing for the air to slide along, so stop it
+      // rather than leaving a circulation trapped in there.
+      v = mix(v, vec3(0.0), smoothstep(0.92, 1.0, solid));
+    } else {
+      // A partly solid cell is slowed in proportion, which is what makes a coarse grid
+      // produce a smooth surface rather than a staircase.
+      v = mix(v, vec3(0.0), solid);
+    }
 
     // Lateral walls slip. A no-slip tunnel wall would grow a boundary layer far thicker
     // than the real one at this resolution, and it is not what the simulation is about.

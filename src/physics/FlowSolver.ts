@@ -12,6 +12,7 @@ import {
   Vector2,
   Vector3,
   WebGLRenderTarget,
+  type IUniform,
   type Texture,
   type WebGLRenderer,
 } from 'three';
@@ -53,6 +54,14 @@ export interface FlowSolverOptions {
   /** Cells along the streamwise axis. */
   resolution?: number;
   jacobiIterations?: number;
+}
+
+/**
+ * Anything with a uniform table. A ShaderMaterial is one; so is the object three.js hands
+ * to an onBeforeCompile hook, which is how the aircraft's own material borrows the field.
+ */
+export interface UniformHolder {
+  uniforms: Record<string, IUniform>;
 }
 
 export interface SolverStats {
@@ -153,6 +162,7 @@ export class FlowSolver {
           uDomainMin: { value: new Vector3() },
           uDomainSize: { value: new Vector3(1, 1, 1) },
           uCellWorld: { value: 1 },
+          uWallSlip: { value: 0 },
         },
       });
       this.materials.push(material);
@@ -224,9 +234,9 @@ export class FlowSolver {
    * the list: the solver reassigns those to intermediate buffers as it works through a
    * step, and a borrower wants the finished field.
    */
-  shareUniforms(material: ShaderMaterial): void {
+  shareUniforms(target: UniformHolder): void {
     for (const name of FlowSolver.SHARED_UNIFORMS) {
-      if (material.uniforms[name]) material.uniforms[name] = this.advect.uniforms[name];
+      if (target.uniforms[name]) target.uniforms[name] = this.advect.uniforms[name];
     }
   }
 
@@ -416,6 +426,22 @@ export class FlowSolver {
     this.pressure = [this.pressure[1], this.pressure[0]];
   }
 
+  /**
+   * How the aircraft's surface treats the air.
+   *
+   * No-slip is the physical condition and is what produces a wake. Slip is the inviscid
+   * one, and it is what makes surface pressure readable: at this resolution a no-slip
+   * wall does not grow a boundary layer, it grows a numerical one metres thick, and that
+   * swamps the pressure signal the surface is supposed to show.
+   */
+  setWallSlip(slip: boolean): void {
+    this.assign('uWallSlip', slip ? 1 : 0);
+  }
+
+  get wallSlip(): boolean {
+    return (this.advect.uniforms.uWallSlip.value as number) > 0.5;
+  }
+
   setJacobiIterations(count: number): void {
     this.jacobiIterations = Math.max(1, Math.round(count));
   }
@@ -463,6 +489,35 @@ export class FlowSolver {
           data[dst] = DataUtils.fromHalfFloat(raw[src]);
           data[dst + 1] = DataUtils.fromHalfFloat(raw[src + 1]);
           data[dst + 2] = DataUtils.fromHalfFloat(raw[src + 2]);
+        }
+      }
+    }
+    return { data, grid };
+  }
+
+  /**
+   * Read the pressure field back to the CPU, like readVelocity and just as slow.
+   *
+   * Unlike velocity, this is defined on the surface itself: the Poisson solve gives solid
+   * neighbours a zero-gradient condition, so the value in a body cell is the pressure
+   * against the body rather than a hole in the data.
+   */
+  readPressure(): { data: Float32Array; grid: GridSize } | null {
+    if (!this.supported || !this.pressure) return null;
+    const { width, height } = this.layout.texture;
+    const raw = new Uint16Array(width * height * 4);
+    this.renderer.readRenderTargetPixels(this.pressure[0], 0, 0, width, height, raw);
+
+    const { grid } = this.layout;
+    const data = new Float32Array(grid.x * grid.y * grid.z);
+    for (let z = 0; z < grid.z; z++) {
+      const tileX = z % this.layout.tiles.x;
+      const tileY = Math.floor(z / this.layout.tiles.x);
+      for (let y = 0; y < grid.y; y++) {
+        for (let x = 0; x < grid.x; x++) {
+          const px = tileX * grid.x + x;
+          const py = tileY * grid.y + y;
+          data[x + grid.x * (y + grid.y * z)] = DataUtils.fromHalfFloat(raw[(py * width + px) * 4]);
         }
       }
     }

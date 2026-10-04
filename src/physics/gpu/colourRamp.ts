@@ -37,3 +37,36 @@ export const SPEED_COLOUR_GLSL = /* glsl */ `
     return mix(fast, fastest, clamp((s - 1.4) / 0.6, 0.0, 1.0));
   }
 `;
+
+/**
+ * Pressure coefficient, which needs a different ramp from speed.
+ *
+ * Cp is a signed quantity about a meaningful zero — free-stream static pressure — so it
+ * wants a diverging ramp with a neutral middle, not the ordered one speed uses. Red for
+ * air pushing harder than the free stream, blue for air pulled below it, which is the
+ * convention nearly every CFD surface plot uses: the stagnation point on the nose comes
+ * out red and the suction peak over the wing comes out blue.
+ */
+
+/** Cp is clamped to this before colouring. Incompressible flow cannot exceed +1. */
+export const CP_RANGE = { min: -1, max: 1 };
+
+/** What the Cp legend labels. */
+export const CP_LEGEND_STOPS = [-1, -0.5, 0, 0.5, 1];
+
+export const PRESSURE_COLOUR_GLSL = /* glsl */ `
+  vec3 pressureColour(float cp) {
+    float t = clamp((cp + 1.0) * 0.5, 0.0, 1.0);
+    vec3 suction = vec3(0.09, 0.23, 0.55);
+    vec3 low     = vec3(0.27, 0.52, 0.78);
+    // Not pure white: most of an airliner sits near the free-stream pressure, and a
+    // white middle would be indistinguishable from the livery it replaces.
+    vec3 neutral = vec3(0.87, 0.88, 0.85);
+    vec3 high    = vec3(0.95, 0.56, 0.30);
+    vec3 stagnation = vec3(0.72, 0.12, 0.16);
+    if (t < 0.25) return mix(suction, low, t / 0.25);
+    if (t < 0.5) return mix(low, neutral, (t - 0.25) / 0.25);
+    if (t < 0.75) return mix(neutral, high, (t - 0.5) / 0.25);
+    return mix(high, stagnation, (t - 0.75) / 0.25);
+  }
+`;

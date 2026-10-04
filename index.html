@@ -61,6 +61,21 @@
         <div class="flow-controls" id="flow-controls">
           <div class="flow-head">
             <label class="switch">
+              <input type="checkbox" id="pressure-enabled" disabled />
+              <span>Surface pressure</span>
+            </label>
+          </div>
+          <div class="legend" id="pressure-legend" hidden>
+            <div class="legend-bar legend-bar-pressure"></div>
+            <div class="legend-ticks" id="pressure-ticks"></div>
+            <p class="legend-caption">
+              Pressure coefficient C<sub>p</sub> — blue is suction, red is air brought to
+              rest. Unchanged by tunnel speed, which is what a coefficient means.
+            </p>
+          </div>
+
+          <div class="flow-head">
+            <label class="switch">
               <input type="checkbox" id="streamlines-enabled" checked />
               <span>Streamlines</span>
             </label>
@@ -134,7 +149,7 @@
             aria-label="Position of the flow slice"
           />
           <div class="legend" id="slice-legend">
-            <div class="legend-bar"></div>
+            <div class="legend-bar legend-bar-speed"></div>
             <div class="legend-ticks" id="legend-ticks"></div>
             <p class="legend-caption">Local airspeed, m/s — streamlines and slice alike</p>
           </div>

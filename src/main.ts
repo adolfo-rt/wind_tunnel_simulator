@@ -14,6 +14,9 @@ import {
   Streamlines,
   type StreamlineDensity,
 } from './physics/Streamlines';
+import { SurfacePressure } from './physics/SurfacePressure';
+import { CP_LEGEND_STOPS } from './physics/gpu/colourRamp';
+import { surfaceCp } from './physics/surface/cp';
 import { SdfBuilder } from './physics/sdf/SdfBuilder';
 import { sampleSdf, type SdfGrid } from './physics/sdf/buildSdf';
 import { Box3, Sphere, Vector3 } from 'three';
@@ -77,6 +80,11 @@ viewer.world.add(streamlines.group);
 // they cannot fall out of step later.
 for (const material of streamlines.sharedMaterials) solver.shareUniforms(material);
 
+// The aircraft's own skin reads the same field, through the same uniforms, so the colours
+// on the aeroplane and the streamlines going past it cannot disagree about the air.
+const pressure = new SurfacePressure();
+solver.shareUniforms(pressure);
+
 const flowStatus = document.getElementById('flow-status') as HTMLElement;
 const legendTicks = document.getElementById('legend-ticks') as HTMLElement;
 const sliceLegend = document.getElementById('slice-legend') as HTMLElement;
@@ -88,6 +96,18 @@ legendTicks.replaceChildren(
     return tick;
   }),
 );
+const pressureEnabled = document.getElementById('pressure-enabled') as HTMLInputElement;
+const pressureLegend = document.getElementById('pressure-legend') as HTMLElement;
+const pressureTicks = document.getElementById('pressure-ticks') as HTMLElement;
+
+pressureTicks.replaceChildren(
+  ...CP_LEGEND_STOPS.map((cp) => {
+    const tick = document.createElement('span');
+    tick.textContent = cp > 0 ? `+${cp}` : String(cp);
+    return tick;
+  }),
+);
+
 const sliceEnabled = document.getElementById('slice-enabled') as HTMLInputElement;
 const slicePosition = document.getElementById('slice-position') as HTMLInputElement;
 const axisButtons = [...document.querySelectorAll<HTMLButtonElement>('#slice-axes .axis')];
@@ -109,7 +129,15 @@ slice.setFreeStream(kmhToMs(store.get().speedKmh));
 const updateLegendVisibility = () => {
   const showing = sliceEnabled.checked || streamlinesEnabled.checked;
   sliceLegend.hidden = !showing || !solver.supported;
+  // Its own legend, because Cp is a different quantity on a different scale. Sharing the
+  // speed bar would have been tidier and would have said something untrue.
+  pressureLegend.hidden = !pressureEnabled.checked || !solver.supported;
 };
+
+pressureEnabled.addEventListener('change', () => {
+  pressure.setEnabled(pressureEnabled.checked);
+  updateLegendVisibility();
+});
 
 sliceEnabled.addEventListener('change', () => {
   slice.setVisible(sliceEnabled.checked);
@@ -191,6 +219,8 @@ if (!solver.supported) {
   slicePosition.disabled = true;
   streamlinesEnabled.disabled = true;
   streamlines.setVisible(false);
+  pressureEnabled.disabled = true;
+  pressure.setEnabled(false);
   for (const button of densityButtons) button.disabled = true;
   streamlineNote.textContent = '';
   updateLegendVisibility();
@@ -206,6 +236,7 @@ viewer.onFrame((delta, elapsed) => {
     // each step and has to be handed over again rather than bound once.
     slice.setVelocity(solver.velocityTexture);
     streamlines.setVelocity(solver.velocityTexture);
+    pressure.setVelocity(solver.velocityTexture);
     streamlines.step(delta);
     if (elapsed - lastStatusPaint > 0.25) {
       lastStatusPaint = elapsed;
@@ -244,6 +275,9 @@ async function load(spec: AircraftSpec): Promise<void> {
   if (pendingId !== spec.id) return;
 
   const built = buildAircraft(spec, 'high');
+  // Before the group is ever rendered: three.js caches a compiled program the first time
+  // it draws a material, and a patch applied afterwards would not be in it.
+  pressure.attach(built.surfaces);
 
   if (current) {
     viewer.world.remove(current.group);
@@ -351,6 +385,19 @@ declare global {
        * not something a screenshot can settle.
        */
       distanceToAircraft: (x: number, y: number, z: number) => number | null;
+      /**
+       * Pressure coefficient at a batch of surface points, each given as a position and
+       * the direction its skin faces: [x, y, z, nx, ny, nz, ...] in world coordinates.
+       *
+       * Batched because it reads the velocity field back off the GPU once and samples it
+       * many times - the readback is slow, and interleaving it with the particle passes
+       * perturbs them. It mirrors what the aircraft's fragment shader does, which is how
+       * a headless check can ask the picture's own question, and it is the shape stage 8
+       * will want for integrating forces over the skin.
+       */
+      samplePressure: (samples: ArrayLike<number>) => Float32Array | null;
+      readPressure: () => { data: Float32Array; grid: { x: number; y: number; z: number } } | null;
+      setWallSlip: (slip: boolean) => void;
       select: (id: string) => void;
       current: () => BuiltAircraft | null;
       /** Point the camera down one axis at the current aircraft. */
@@ -372,6 +419,23 @@ window.windTunnel = {
     if (!obstacle || !current) return null;
     const local = current.group.worldToLocal(new Vector3(x, y, z));
     return sampleSdf(obstacle, local.x, local.y, local.z);
+  },
+  readPressure: () => solver.readPressure(),
+  setWallSlip: (slip: boolean) => solver.setWallSlip(slip),
+  samplePressure: (samples) => {
+    const field = solver.readVelocity();
+    if (!field) return null;
+    const domain = solver.domain;
+    const cellWorld = pressure.cellWorld;
+    const point = new Vector3();
+    const normal = new Vector3();
+    const out = new Float32Array(Math.floor(samples.length / 6));
+    for (let i = 0; i < out.length; i++) {
+      point.set(samples[i * 6], samples[i * 6 + 1], samples[i * 6 + 2]);
+      normal.set(samples[i * 6 + 3], samples[i * 6 + 4], samples[i * 6 + 5]);
+      out[i] = surfaceCp(field.data, field.grid, domain, point, normal, cellWorld);
+    }
+    return out;
   },
   current: () => current,
   view: (which) => {

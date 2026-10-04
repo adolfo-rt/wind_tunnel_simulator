@@ -51,6 +51,15 @@ export interface BuiltAircraft {
   wingStation: (z: number) => { x: number; y: number; chord: number };
   /** What was actually generated, so the geometry can be checked against the spec. */
   parts: { nacelles: number };
+  /**
+   * Materials on surfaces the solver knows about.
+   *
+   * Stage 5 colours these by pressure. Fan blades and spinners are deliberately not
+   * among them: they are visual detail, they are not in the obstacle field, and painting
+   * a pressure reading on a surface the simulation has never seen would be a picture
+   * making a claim the physics is not making.
+   */
+  surfaces: MeshStandardMaterial[];
   dispose: () => void;
 }
 
@@ -92,6 +101,9 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
       side: DoubleSide,
     }),
     dark: new MeshStandardMaterial({ color: 0x2b3038, roughness: 0.5, metalness: 0.4 }),
+    // Same look as `dark`, but on the spinner, which is visual detail rather than part
+    // of the aerodynamic solid. A separate material is what lets the two be told apart.
+    hub: new MeshStandardMaterial({ color: 0x2b3038, roughness: 0.5, metalness: 0.4 }),
   };
 
   const assembly: Assembly = { meshes: [], solids: [] };
@@ -208,7 +220,7 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
     add(assembly, buildNacelleCowl(params), materials.engine, true);
     add(assembly, buildExhaustPlug(params), materials.dark, true);
     if (high) {
-      add(assembly, buildSpinner(params), materials.dark, false);
+      add(assembly, buildSpinner(params), materials.hub, false);
       add(assembly, buildFanBlades(params), materials.blade, false);
     }
   };
@@ -351,6 +363,7 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
     bounds,
     wingStation,
     parts: { nacelles: nacelleCount },
+    surfaces: [materials.fuselage, materials.wing, materials.tail, materials.engine, materials.dark],
     dispose: () => {
       for (const mesh of assembly.meshes) mesh.geometry.dispose();
       merged.dispose();
