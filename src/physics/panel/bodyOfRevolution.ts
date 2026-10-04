@@ -58,26 +58,26 @@ const TRUSTED_RADIUS_FRACTION = 0.35;
 const SOURCE_INSET = 0.02;
 
 /**
- * Control points per source.
+ * How many sources the body is represented by.
  *
- * One source per control point makes the system square and very nearly singular: sources
- * on the axis a long way from a control point all look alike to it, so the columns are
- * close to linearly dependent and the solved strengths oscillate wildly between large
- * positive and large negative values. The surface pressure that comes back is smooth
- * enough to look convincing and wrong by more than its own magnitude - on a slender
- * ovoid, a suction peak of -1.06 where the exact answer is -0.36.
+ * Fixed by the geometry, deliberately not by how finely the caller sampled it. Scaling the
+ * source count with the station count makes the answer depend on the sampling: cosine
+ * spacing bunches stations at the ends, which bunches sources onto the axis exactly where
+ * the body is closest to it, and the system gets more ill-conditioned the more carefully
+ * you describe the shape. On a 737's tail cone the suction peak wandered -0.29, -0.38,
+ * -0.41, -0.38, -0.22, -0.13 as the station count went from 40 to 500 — not convergence,
+ * just a different amount of damping each time. Held fixed, the same sweep gives -0.33 to
+ * -0.34 throughout.
  *
- * Asking fewer sources to satisfy more control points in a least-squares sense removes
- * the freedom that was being abused. The ratio and the regularisation below were swept
- * against the Rankine ovoid, whose answer is known exactly. Mean error in Cp over bodies
- * of fineness 1.9 to 6.2, at a regularisation of 1e-6:
+ * More stations now do what more stations should: constrain the same smooth source
+ * distribution more tightly, which is what the least-squares fit below is for.
  *
- *   control points per source     1       2       3       4       6       8
- *   mean |dCp|                 0.22   0.007   0.008   0.013   0.037   0.049
- *
- * Square is hopeless, two is the floor, and it degrades gently either side.
+ * The number itself is where accuracy stops improving. Mean error in Cp against the exact
+ * Rankine ovoid: 0.054 at 15 sources, 0.020 at 20, 0.0084 at 25, and 0.0080 from 30
+ * onwards — flat thereafter, so beyond this the extra freedom buys nothing and only
+ * sharpens its pursuit of the singularity at a closing tail.
  */
-const CONTROL_POINTS_PER_SOURCE = 2;
+const SOURCE_COUNT = 32;
 
 /**
  * Tikhonov regularisation, relative to the mean diagonal of the normal equations.
@@ -105,7 +105,7 @@ function sourceVelocity(dx: number, r: number): { axial: number; radial: number 
  * The stations describe the body's radius along its own axis, nose first.
  */
 export interface BodyOptions {
-  controlPointsPerSource?: number;
+  sources?: number;
   regularisation?: number;
 }
 
@@ -145,8 +145,7 @@ export function solveBodyOfRevolution(
 
   // Fewer sources than control points, spread along the axis and held clear of the ends.
   const rows = active.length;
-  const perSource = options.controlPointsPerSource ?? CONTROL_POINTS_PER_SOURCE;
-  const count = Math.max(3, Math.round(rows / perSource));
+  const count = Math.max(3, Math.min(options.sources ?? SOURCE_COUNT, Math.floor(rows / 2)));
   const sourceX = new Float64Array(count);
   const first = x[0] + SOURCE_INSET * length;
   const span = length * (1 - 2 * SOURCE_INSET);

@@ -114,6 +114,56 @@ describe('on a fuselage', () => {
   });
 });
 
+/**
+ * How finely a body is described should not change what the flow does to it.
+ *
+ * It did. The source count used to scale with the station count, so sampling the same
+ * fuselage more carefully packed more sources onto its axis, and the boat-tail suction
+ * wandered from -0.29 to -0.41 and back to -0.13 as the stations went from 40 to 500.
+ * None of those was convergence; they were six different amounts of damping. With the
+ * source count fixed by the geometry, extra stations do what extra stations should.
+ */
+describe('the answer does not depend on how finely the body was sampled', () => {
+  /** A fuselage profile, sampled at whatever resolution is asked for. */
+  const sampled = (count: number): BodyStation[] => {
+    const stations: BodyStation[] = [];
+    for (let i = 0; i < count; i++) {
+      const t = 0.5 * (1 - Math.cos((Math.PI * i) / (count - 1)));
+      let r: number;
+      if (t < 0.12) r = Math.sqrt(1 - ((0.12 - t) / 0.12) ** 2);
+      else if (t > 0.72) r = 1 - ((t - 0.72) / 0.28) ** 2 * 0.95;
+      else r = 1;
+      stations.push({ x: t * 20, radius: Math.max(0, 1.88 * r) });
+    }
+    return stations;
+  };
+
+  const boatTailSuction = (count: number) => {
+    const stations = sampled(count);
+    const solved = solveBodyOfRevolution(stations);
+    let lowest = Infinity;
+    for (let i = 0; i < stations.length; i++) {
+      if (stations[i].x / 20 < 0.66) continue;
+      lowest = Math.min(lowest, solved.cp[i]);
+    }
+    return lowest;
+  };
+
+  it('finds the same boat-tail suction however many stations it is given', () => {
+    const counts = [50, 90, 160, 280, 460];
+    const values = counts.map(boatTailSuction);
+    const lowest = Math.min(...values);
+    const highest = Math.max(...values);
+    expect(highest - lowest).toBeLessThan(0.05);
+  });
+
+  it('still finds a suction there at all, which is what a boat-tail does', () => {
+    // The afterbody contracts, so the strongest sinks lie downstream of it and pull the
+    // flow along: suction first, then the recovery to the rear stagnation point.
+    expect(boatTailSuction(120)).toBeLessThan(-0.05);
+  });
+});
+
 describe('degenerate input', () => {
   it('returns a flat answer rather than throwing', () => {
     expect(solveBodyOfRevolution([]).cp).toHaveLength(0);
