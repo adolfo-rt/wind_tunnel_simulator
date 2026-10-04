@@ -299,11 +299,17 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
         if (t < 0.12) return radius * (0.82 + 0.18 * Math.sqrt(t / 0.12));
         if (t > 0.72) return radius * (1 - 0.45 * ((t - 0.72) / 0.28) ** 2);
         return radius;
-      }, 40),
+      }),
     });
     const nacelleTag: AeroTag = { kind: 'body', body: `nacelle${nacelleCount}` };
     add(assembly, buildNacelleCowl(params), materials.engine, true, nacelleTag);
-    add(assembly, buildExhaustPlug(params), materials.dark, true, nacelleTag);
+    // The exhaust plug deliberately carries no pressure claim. It sits inside the
+    // annular nozzle, in flow this simulation does not represent at all - there is no
+    // jet here, and a single body of revolution cannot describe a duct with a centre
+    // body down the middle of it anyway. It also extends half a metre further aft than
+    // the cowl the model solves, so it was being painted one flat clamped value over its
+    // rear forty per cent: the most saturated colour on the engine, and not a result.
+    add(assembly, buildExhaustPlug(params), materials.dark, true);
     if (high) {
       add(assembly, buildSpinner(params), materials.hub, false);
       add(assembly, buildFanBlades(params), materials.blade, false);
