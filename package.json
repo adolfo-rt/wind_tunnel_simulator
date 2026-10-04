@@ -14,7 +14,8 @@
     "shots": "node scripts/shoot.mjs",
     "views": "node scripts/views.mjs",
     "verify:flow": "node scripts/verify-flow.mjs",
-    "verify:streamlines": "node scripts/verify-streamlines.mjs"
+    "verify:streamlines": "node scripts/verify-streamlines.mjs",
+    "verify:pressure": "node scripts/verify-pressure.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

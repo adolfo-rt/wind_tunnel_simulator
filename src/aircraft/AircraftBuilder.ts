@@ -80,8 +80,29 @@ interface Assembly {
   solids: BufferGeometry[];
 }
 
-function add(assembly: Assembly, geometry: BufferGeometry, material: MeshStandardMaterial, isSolid: boolean): void {
-  assembly.meshes.push(new Mesh(geometry, material));
+/**
+ * What a mesh is, aerodynamically.
+ *
+ * Carried on the mesh so the pressure map knows where each vertex sits on the shape
+ * without having to work it back out from its position. A lifting surface's loft already
+ * stores exactly that in its texture coordinates - around the contour in u, along the
+ * span in v - so the tag only needs to say which surface it is and how many points the
+ * airfoil was drawn with.
+ */
+export type AeroTag =
+  | { kind: 'surface'; surface: string; resolution: number }
+  | { kind: 'body'; body: string };
+
+function add(
+  assembly: Assembly,
+  geometry: BufferGeometry,
+  material: MeshStandardMaterial,
+  isSolid: boolean,
+  aero?: AeroTag,
+): void {
+  const mesh = new Mesh(geometry, material);
+  if (aero) mesh.userData.aero = aero;
+  assembly.meshes.push(mesh);
   if (isSolid) assembly.solids.push(geometry);
 }
 
@@ -117,7 +138,7 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
   };
 
   const assembly: Assembly = { meshes: [], solids: [] };
-  add(assembly, fuselage.geometry, materials.fuselage, true);
+  add(assembly, fuselage.geometry, materials.fuselage, true, { kind: 'body', body: 'fuselage' });
 
   const aeroSurfaces: SurfaceRequest[] = [];
   const aeroBodies: { name: string; stations: BodyStation[] }[] = [];
@@ -187,8 +208,9 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
     wingParams.leadingEdgeOffset = ogivalLeadingEdge(semiSpan);
   }
 
-  add(assembly, buildLiftingSurface(wingParams), materials.wing, true);
-  add(assembly, buildLiftingSurface({ ...wingParams, mirror: true }), materials.wing, true);
+  const wingTag: AeroTag = { kind: 'surface', surface: 'wing', resolution: wingParams.airfoilResolution ?? 26 };
+  add(assembly, buildLiftingSurface(wingParams), materials.wing, true, wingTag);
+  add(assembly, buildLiftingSurface({ ...wingParams, mirror: true }), materials.wing, true, wingTag);
   aeroSurfaces.push({ name: 'wing', params: wingParams, mirrored: true });
 
   const wingStation = (z: number) => {
@@ -220,7 +242,9 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
     stations: high ? 10 : 6,
     airfoilResolution: high ? 24 : 16,
   };
-  add(assembly, buildLiftingSurface(finParams), materials.tail, true);
+  add(assembly, buildLiftingSurface(finParams), materials.tail, true, {
+    kind: 'surface', surface: 'fin', resolution: finParams.airfoilResolution ?? 26,
+  });
   aeroSurfaces.push({ name: 'fin', params: finParams, mirrored: false });
 
   if (tail.config !== 'delta') {
@@ -253,8 +277,9 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
       stations: high ? 10 : 6,
       airfoilResolution: high ? 24 : 16,
     };
-    add(assembly, buildLiftingSurface(hParams), materials.tail, true);
-    add(assembly, buildLiftingSurface({ ...hParams, mirror: true }), materials.tail, true);
+    const tailTag: AeroTag = { kind: 'surface', surface: 'tailplane', resolution: hParams.airfoilResolution ?? 26 };
+    add(assembly, buildLiftingSurface(hParams), materials.tail, true, tailTag);
+    add(assembly, buildLiftingSurface({ ...hParams, mirror: true }), materials.tail, true, tailTag);
     aeroSurfaces.push({ name: 'tailplane', params: hParams, mirrored: true });
   }
 
@@ -276,8 +301,9 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
         return radius;
       }, 40),
     });
-    add(assembly, buildNacelleCowl(params), materials.engine, true);
-    add(assembly, buildExhaustPlug(params), materials.dark, true);
+    const nacelleTag: AeroTag = { kind: 'body', body: `nacelle${nacelleCount}` };
+    add(assembly, buildNacelleCowl(params), materials.engine, true, nacelleTag);
+    add(assembly, buildExhaustPlug(params), materials.dark, true, nacelleTag);
     if (high) {
       add(assembly, buildSpinner(params), materials.hub, false);
       add(assembly, buildFanBlades(params), materials.blade, false);

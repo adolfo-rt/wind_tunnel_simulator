@@ -16,7 +16,8 @@ import {
 } from './physics/Streamlines';
 import { SurfacePressure } from './physics/SurfacePressure';
 import { CP_LEGEND_STOPS } from './physics/gpu/colourRamp';
-import { surfaceCp } from './physics/surface/cp';
+import { bakeSurfacePressure } from './physics/surface/bakeCp';
+import { solveAircraft, type PanelAircraft } from './physics/panel/aircraftModel';
 import { SdfBuilder } from './physics/sdf/SdfBuilder';
 import { sampleSdf, type SdfGrid } from './physics/sdf/buildSdf';
 import { Box3, Sphere, Vector3 } from 'three';
@@ -80,10 +81,14 @@ viewer.world.add(streamlines.group);
 // they cannot fall out of step later.
 for (const material of streamlines.sharedMaterials) solver.shareUniforms(material);
 
-// The aircraft's own skin reads the same field, through the same uniforms, so the colours
-// on the aeroplane and the streamlines going past it cannot disagree about the air.
+/**
+ * Surface pressure comes from the panel model, not from the grid.
+ *
+ * The grid cannot resolve a surface at this scale - measured, and documented in
+ * `physics/surface/cp.ts` - so the skin gets a surface method and the volume keeps the
+ * solver. The two are honest about which is which in the interface.
+ */
 const pressure = new SurfacePressure();
-solver.shareUniforms(pressure);
 
 const flowStatus = document.getElementById('flow-status') as HTMLElement;
 const legendTicks = document.getElementById('legend-ticks') as HTMLElement;
@@ -130,8 +135,10 @@ const updateLegendVisibility = () => {
   const showing = sliceEnabled.checked || streamlinesEnabled.checked;
   sliceLegend.hidden = !showing || !solver.supported;
   // Its own legend, because Cp is a different quantity on a different scale. Sharing the
-  // speed bar would have been tidier and would have said something untrue.
-  pressureLegend.hidden = !pressureEnabled.checked || !solver.supported;
+  // speed bar would have been tidier and would have said something untrue. It does not
+  // depend on the grid solver, because the panel model runs on the CPU and works on any
+  // machine that can draw the aeroplane at all.
+  pressureLegend.hidden = !pressureEnabled.checked;
 };
 
 pressureEnabled.addEventListener('change', () => {
@@ -219,8 +226,6 @@ if (!solver.supported) {
   slicePosition.disabled = true;
   streamlinesEnabled.disabled = true;
   streamlines.setVisible(false);
-  pressureEnabled.disabled = true;
-  pressure.setEnabled(false);
   for (const button of densityButtons) button.disabled = true;
   streamlineNote.textContent = '';
   updateLegendVisibility();
@@ -236,7 +241,6 @@ viewer.onFrame((delta, elapsed) => {
     // each step and has to be handed over again rather than bound once.
     slice.setVelocity(solver.velocityTexture);
     streamlines.setVelocity(solver.velocityTexture);
-    pressure.setVelocity(solver.velocityTexture);
     streamlines.step(delta);
     if (elapsed - lastStatusPaint > 0.25) {
       lastStatusPaint = elapsed;
@@ -253,6 +257,8 @@ let lastStatusPaint = 0;
 let current: BuiltAircraft | null = null;
 /** Kept so the streamlines can be checked against the same surface the solver sees. */
 let obstacle: SdfGrid | null = null;
+/** The panel solution for the aircraft on screen, which the skin is coloured from. */
+let panelModel: PanelAircraft | null = null;
 let pendingId: string | null = null;
 
 /** Wait for the browser to paint, so the loading indicator is actually seen. */
@@ -278,6 +284,11 @@ async function load(spec: AircraftSpec): Promise<void> {
   // Before the group is ever rendered: three.js caches a compiled program the first time
   // it draws a material, and a patch applied afterwards would not be in it.
   pressure.attach(built.surfaces);
+
+  // Solve the aircraft as a panel model and write the result onto its own vertices. A
+  // few tens of milliseconds, once, when the aircraft changes.
+  panelModel = solveAircraft(built.aero);
+  bakeSurfacePressure(built.group, panelModel);
 
   if (current) {
     viewer.world.remove(current.group);
@@ -385,17 +396,15 @@ declare global {
        * not something a screenshot can settle.
        */
       distanceToAircraft: (x: number, y: number, z: number) => number | null;
+      /** The panel solution the aircraft's skin is coloured from. */
+      panelModel: () => PanelAircraft | null;
       /**
-       * Pressure coefficient at a batch of surface points, each given as a position and
-       * the direction its skin faces: [x, y, z, nx, ny, nz, ...] in world coordinates.
+       * Cp at every vertex of every mesh, exactly as baked.
        *
-       * Batched because it reads the velocity field back off the GPU once and samples it
-       * many times - the readback is slow, and interleaving it with the particle passes
-       * perturbs them. It mirrors what the aircraft's fragment shader does, which is how
-       * a headless check can ask the picture's own question, and it is the shape stage 8
-       * will want for integrating forces over the skin.
+       * The values the picture is drawn from, read back without going through the
+       * picture, so a headless check can ask what the colours actually mean.
        */
-      samplePressure: (samples: ArrayLike<number>) => Float32Array | null;
+      surfacePressures: () => Array<{ aero: string; cp: Float32Array }>;
       readPressure: () => { data: Float32Array; grid: { x: number; y: number; z: number } } | null;
       setWallSlip: (slip: boolean) => void;
       select: (id: string) => void;
@@ -422,19 +431,20 @@ window.windTunnel = {
   },
   readPressure: () => solver.readPressure(),
   setWallSlip: (slip: boolean) => solver.setWallSlip(slip),
-  samplePressure: (samples) => {
-    const field = solver.readVelocity();
-    if (!field) return null;
-    const domain = solver.domain;
-    const cellWorld = pressure.cellWorld;
-    const point = new Vector3();
-    const normal = new Vector3();
-    const out = new Float32Array(Math.floor(samples.length / 6));
-    for (let i = 0; i < out.length; i++) {
-      point.set(samples[i * 6], samples[i * 6 + 1], samples[i * 6 + 2]);
-      normal.set(samples[i * 6 + 3], samples[i * 6 + 4], samples[i * 6 + 5]);
-      out[i] = surfaceCp(field.data, field.grid, domain, point, normal, cellWorld);
-    }
+  panelModel: () => panelModel,
+  surfacePressures: () => {
+    const out: Array<{ aero: string; cp: Float32Array }> = [];
+    current?.group.traverse((object) => {
+      const mesh = object as { isMesh?: boolean; geometry?: { getAttribute: (n: string) => { array: ArrayLike<number> } | undefined }; userData?: Record<string, unknown> };
+      if (!mesh.isMesh) return;
+      const attribute = mesh.geometry?.getAttribute('aCp');
+      if (!attribute) return;
+      const tag = mesh.userData?.aero as { kind: string; surface?: string; body?: string } | undefined;
+      out.push({
+        aero: tag ? (tag.surface ?? tag.body ?? tag.kind) : 'untagged',
+        cp: Float32Array.from(attribute.array),
+      });
+    });
     return out;
   },
   current: () => current,

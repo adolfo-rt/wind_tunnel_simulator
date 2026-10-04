@@ -43,7 +43,7 @@ The project is built in stages, each independently testable.
 | 2 | Wind tunnel, fans, speed control | Done |
 | 3 | Flow field solver | Done |
 | 4 | Volumetric streamlines | Done |
-| 5 | Surface pressure visualisation | Planned |
+| 5 | Surface pressure visualisation | Done |
 | 6 | Turbulence and wake | Planned |
 | 7 | Performance and quality tiers | Planned |
 | 8 | Fuel-efficiency analytics | Planned |
@@ -202,6 +202,78 @@ radical-inverse sequence — a golden-ratio one, which would have matched the se
 turned out to be the golden angle's own sequence reflected, and the tracers came out as a
 spiral sheet sweeping down the tunnel instead of an even field.
 
+## Surface pressure
+
+The aircraft's skin can be coloured by pressure coefficient: red where the air is brought
+to rest, blue where it is pulled below free-stream pressure. It does not change with the
+tunnel speed, and that is not a bug — C<sub>p</sub> is a coefficient, and the division by
+dynamic pressure is exactly what takes the speed out. The streamlines are the opposite
+case and have to be scaled by the slider deliberately. The interface says which is which.
+
+### Why this does not come from the grid
+
+It is the obvious thing to try, and it was tried and measured. Sampling the solved
+velocity just off the skin produces a map that tracks how thick the body is rather than
+what the air is doing: the crown of the fuselage reads C<sub>p</sub> +0.63 where it should
+be about −0.1, higher than the nose, and doubling the grid resolution makes it worse
+(+0.83).
+
+The cause is the no-slip wall. At this scale it does not grow a boundary layer; it grows a
+numerical shear layer about three cells thick, and that layer thickens as √(Δx·L) — so
+measured in cells it gets *relatively* worse as the grid is refined, while the body only
+gains cells linearly. A 737's fuselage is 1.1 cells in radius at 64 cells and 2.2 at 128;
+its wing is under one cell thick at both. An inviscid wall removes the mechanism but
+destroys the wake, and a converged resolution sweep with one does not converge: 32, 48, 64
+and 96 cells give crown C<sub>p</sub> of −0.147, +0.649, +0.322 and +0.904. It is not a
+resolution problem, and no setting fixes it.
+
+So the surface gets a surface method, and the grid keeps the volume. That split is stated
+in the interface rather than hidden.
+
+### The panel model
+
+Three solvers, each checked against a result known long before computers, because a panel
+method will return a confident, smooth, entirely wrong answer if a sign is backwards and
+nothing in the output looks wrong.
+
+- **A vortex lattice** over the lifting surfaces gives the span loading — where sweep,
+  taper, twist and tip devices make their difference. Lift slope 5.514 per radian against
+  lifting-line theory's 5.585 at aspect ratio 16, converging as the span grows; span
+  efficiency converges onto the elliptical minimum at first order.
+- **A Hess–Smith section solve** at each spanwise station turns that into a chordwise
+  pressure distribution — where the airfoil family makes its difference. On NACA 0012,
+  the most measured section in existence: minimum C<sub>p</sub> −0.413 at 11.6% of chord,
+  against a published −0.41 at about 12%.
+- **Bodies of revolution** cover the fuselage and nacelles, against the exact Rankine
+  ovoid: mean error in C<sub>p</sub> of 0.007.
+
+The whole aircraft solves in 70 to 170 milliseconds, once, when the aircraft changes. The
+result is written onto the aircraft's own vertices, so the number the colour is drawn from
+is the same number Stage 8 will integrate into lift and drag — a picture is not something
+a force balance can be checked against, but a vertex attribute is.
+
+The geometry is handed over from the builder rather than rebuilt from the specification.
+Deriving the planform a second time would agree today and drift later, and then the
+pressure map would describe a wing that is not the one on screen.
+
+### What it does not know
+
+It is inviscid, incompressible and linear. No boundary layer, so no separation and no
+stall: push the lift high enough and it will report a suction peak no real section could
+hold. No compressibility, so the shock that forms on a swept wing near its cruise Mach is
+absent — which matters, because delaying that shock is precisely what the supercritical
+section was invented to do. What the picture shows is the pressure distribution that makes
+a shock more or less likely, not the shock. Parts the model has never seen — pylons,
+spinners, fan blades — are left at the free-stream value rather than given a guess.
+
+One limitation is worth stating on its own, because it affects conclusions rather than
+pictures. Washout costs inviscid span efficiency, and these wings carry one camber value
+from root to tip, so there is nothing to compensate it: the 787's five degrees of washout
+takes its span efficiency from 1.01 to 0.61. A real wing is twisted and cambered together
+so the two come out elliptical at cruise, which is what modern wings do best. Left alone,
+the model would report that airliners got *less* efficient with time. Stage 8 has to vary
+camber along the span before publishing any comparison of induced drag across the eras.
+
 ## A note on the numbers
 
 Dimensions in the roster are approximate published figures from manufacturer data and
@@ -240,6 +312,7 @@ npm run shots  -- comet1 boeing747-100 concorde   # three-quarter views
 npm run views  -- boeing747-100                   # side, top and front views
 npm run verify:flow                               # physics of the solved field
 npm run verify:streamlines                        # physics of the tracers
+npm run verify:pressure                           # physics of the surface pressure
 ```
 
 ## Layout
@@ -248,7 +321,7 @@ npm run verify:streamlines                        # physics of the tracers
 src/
   aircraft/     specs, roster, airfoil maths, geometry builders
   core/         renderer, camera, shared state
-  physics/      flow solver, streamlines, distance fields, GPU passes
+  physics/      flow solver, streamlines, panel methods, distance fields, GPU passes
   tunnel/       working section, fans
   ui/           selector, info card, styles
 scripts/        roster generator, headless screenshot and verification tools

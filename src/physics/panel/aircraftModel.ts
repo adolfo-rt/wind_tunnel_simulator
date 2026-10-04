@@ -34,6 +34,8 @@ const CHORD_SAMPLES = 48;
 export interface SectionCurve {
   /** Span fraction of this station: 0 at the root, 1 at the tip, beyond 1 on a winglet. */
   u: number;
+  /** The loft's own span coordinate for this station, which is what the mesh's v holds. */
+  v: number;
   /** Lift coefficient the lattice asked of this section. */
   cl: number;
   /** Cp along the upper and lower surfaces, at `chordStations`. */
@@ -354,7 +356,7 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
       const sectionAngle = angleForLift(section, cl);
       const cp = sectionPressures(section, sectionAngle);
       const { upper, lower } = resample(section, cp, stations);
-      sections.push({ u: frame.u, cl, upper, lower });
+      sections.push({ u: frame.u, v: frame.v, cl, upper, lower });
     }
 
     surfaces.push({ name: entry.surface.name, sections });
@@ -391,12 +393,13 @@ export function surfacePressureAt(
   const sections = surface.sections;
   if (sections.length === 0) return 0;
 
+  // `u` here is the loft's span coordinate, the same one the mesh carries in its v.
   let hi = 1;
-  while (hi < sections.length && sections[hi].u < u) hi++;
+  while (hi < sections.length && sections[hi].v < u) hi++;
   const lo = Math.max(0, hi - 1);
   hi = Math.min(sections.length - 1, hi);
-  const spanGap = sections[hi].u - sections[lo].u;
-  const spanT = spanGap > 1e-9 ? Math.min(1, Math.max(0, (u - sections[lo].u) / spanGap)) : 0;
+  const spanGap = sections[hi].v - sections[lo].v;
+  const spanT = spanGap > 1e-9 ? Math.min(1, Math.max(0, (u - sections[lo].v) / spanGap)) : 0;
 
   const along = (section: SectionCurve) => {
     const curve = upper ? section.upper : section.lower;
