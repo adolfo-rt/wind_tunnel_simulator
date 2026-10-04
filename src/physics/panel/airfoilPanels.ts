@@ -1,4 +1,5 @@
 import type { AirfoilPoint } from '../../aircraft/airfoil';
+import { solveDense } from './linear';
 
 /**
  * A two-dimensional panel method for an airfoil section.
@@ -106,47 +107,6 @@ function prepareContour(contour: AirfoilPoint[]): AirfoilPoint[] {
   for (let i = 1; i < points.length; i++) if (points[i].x > points[trailing].x) trailing = i;
   if (trailing !== 0) points.push(...points.splice(0, trailing));
   return points;
-}
-
-/** Solve a dense system by Gaussian elimination with partial pivoting. */
-function solveDense(a: Float64Array, b: Float64Array, n: number): Float64Array {
-  const m = Float64Array.from(a);
-  const rhs = Float64Array.from(b);
-
-  for (let col = 0; col < n; col++) {
-    let pivot = col;
-    for (let row = col + 1; row < n; row++) {
-      if (Math.abs(m[row * n + col]) > Math.abs(m[pivot * n + col])) pivot = row;
-    }
-    if (pivot !== col) {
-      for (let k = 0; k < n; k++) {
-        const t = m[col * n + k];
-        m[col * n + k] = m[pivot * n + k];
-        m[pivot * n + k] = t;
-      }
-      const t = rhs[col];
-      rhs[col] = rhs[pivot];
-      rhs[pivot] = t;
-    }
-
-    const diagonal = m[col * n + col];
-    if (Math.abs(diagonal) < 1e-14) continue;
-    for (let row = col + 1; row < n; row++) {
-      const factor = m[row * n + col] / diagonal;
-      if (factor === 0) continue;
-      for (let k = col; k < n; k++) m[row * n + k] -= factor * m[col * n + k];
-      rhs[row] -= factor * rhs[col];
-    }
-  }
-
-  const out = new Float64Array(n);
-  for (let row = n - 1; row >= 0; row--) {
-    let sum = rhs[row];
-    for (let k = row + 1; k < n; k++) sum -= m[row * n + k] * out[k];
-    const diagonal = m[row * n + row];
-    out[row] = Math.abs(diagonal) < 1e-14 ? 0 : sum / diagonal;
-  }
-  return out;
 }
 
 /**
