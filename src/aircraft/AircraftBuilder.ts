@@ -24,6 +24,8 @@ import {
   type NacelleParams,
 } from './build/nacelle';
 import { buildFuselageTexture } from './build/livery';
+import type { AircraftModelRequest, SurfaceRequest } from '../physics/panel/aircraftModel';
+import type { BodyStation } from '../physics/panel/bodyOfRevolution';
 
 /**
  * Assemble a complete aircraft from its spec.
@@ -60,6 +62,14 @@ export interface BuiltAircraft {
    * making a claim the physics is not making.
    */
   surfaces: MeshStandardMaterial[];
+  /**
+   * The aircraft described as a panel model, in the very parameters it was lofted from.
+   *
+   * Not rebuilt from the spec: handed over. A second derivation would agree today and
+   * drift tomorrow, and then the pressure map would belong to a wing that is not the one
+   * on screen.
+   */
+  aero: AircraftModelRequest;
   dispose: () => void;
 }
 
@@ -109,6 +119,39 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
   const assembly: Assembly = { meshes: [], solids: [] };
   add(assembly, fuselage.geometry, materials.fuselage, true);
 
+  const aeroSurfaces: SurfaceRequest[] = [];
+  const aeroBodies: { name: string; stations: BodyStation[] }[] = [];
+
+  /**
+   * A body of revolution has to be sampled with its stations clustered at the ends.
+   * Uniform spacing describes a nose that reaches most of its radius in one step, and
+   * the solver is then being asked a badly posed question rather than getting it wrong.
+   */
+  const bodyStations = (
+    from: number,
+    to: number,
+    radiusAt: (x: number) => number,
+    samples = 70,
+  ): BodyStation[] => {
+    const stations: BodyStation[] = [];
+    for (let i = 0; i < samples; i++) {
+      const t = 0.5 * (1 - Math.cos((Math.PI * i) / (samples - 1)));
+      const x = from + (to - from) * t;
+      stations.push({ x, radius: Math.max(0, radiusAt(x)) });
+    }
+    return stations;
+  };
+
+  // The fuselage is not round, so the panel model uses the radius of the circle with the
+  // same cross-sectional area. That is the standard equivalent-body substitution and it
+  // is what makes an axisymmetric method applicable to a slightly oval cabin at all.
+  aeroBodies.push({
+    name: 'fuselage',
+    stations: bodyStations(0, L, (x) =>
+      Math.sqrt(Math.max(0, fuselage.halfWidthAt(x) * fuselage.halfHeightAt(x))),
+    ),
+  });
+
   // ---- Wing -------------------------------------------------------------------
   const semiSpan = wing.span / 2;
   const rootLEx = wing.rootStationFrac * L;
@@ -146,6 +189,7 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
 
   add(assembly, buildLiftingSurface(wingParams), materials.wing, true);
   add(assembly, buildLiftingSurface({ ...wingParams, mirror: true }), materials.wing, true);
+  aeroSurfaces.push({ name: 'wing', params: wingParams, mirrored: true });
 
   const wingStation = (z: number) => {
     const u = Math.min(1, Math.abs(z) / semiSpan);
@@ -177,6 +221,7 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
     airfoilResolution: high ? 24 : 16,
   };
   add(assembly, buildLiftingSurface(finParams), materials.tail, true);
+  aeroSurfaces.push({ name: 'fin', params: finParams, mirrored: false });
 
   if (tail.config !== 'delta') {
     const isTTail = tail.config === 't-tail';
@@ -210,6 +255,7 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
     };
     add(assembly, buildLiftingSurface(hParams), materials.tail, true);
     add(assembly, buildLiftingSurface({ ...hParams, mirror: true }), materials.tail, true);
+    aeroSurfaces.push({ name: 'tailplane', params: hParams, mirrored: true });
   }
 
   // ---- Engines ----------------------------------------------------------------
@@ -217,6 +263,19 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
   let nacelleCount = 0;
   const addNacelle = (params: NacelleParams) => {
     nacelleCount++;
+    // A nacelle is really an open duct, and a body of revolution is a coarse stand-in for
+    // one: it gets the outside of the cowl roughly right and knows nothing about the
+    // flow through the middle. Good enough to colour, not good enough to total up.
+    const radius = params.diameter / 2;
+    aeroBodies.push({
+      name: `nacelle${nacelleCount}`,
+      stations: bodyStations(params.inlet.x, params.inlet.x + params.length, (x) => {
+        const t = (x - params.inlet.x) / Math.max(params.length, 1e-6);
+        if (t < 0.12) return radius * (0.82 + 0.18 * Math.sqrt(t / 0.12));
+        if (t > 0.72) return radius * (1 - 0.45 * ((t - 0.72) / 0.28) ** 2);
+        return radius;
+      }, 40),
+    });
     add(assembly, buildNacelleCowl(params), materials.engine, true);
     add(assembly, buildExhaustPlug(params), materials.dark, true);
     if (high) {
@@ -364,6 +423,7 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
     wingStation,
     parts: { nacelles: nacelleCount },
     surfaces: [materials.fuselage, materials.wing, materials.tail, materials.engine, materials.dark],
+    aero: { surfaces: aeroSurfaces, bodies: aeroBodies },
     dispose: () => {
       for (const mesh of assembly.meshes) mesh.geometry.dispose();
       merged.dispose();

@@ -223,53 +223,78 @@ function summarise(
 
   const stripGamma = new Float64Array(stripCount);
   const stripWidth = new Float64Array(stripCount);
-  const stripY = new Float64Array(stripCount);
   const stripChord = new Float64Array(stripCount);
-  const stripSeen = new Int32Array(stripCount);
+  // Where the wake leaves, and which way the strip faces, both in the cross-flow plane.
+  const innerY = new Float64Array(stripCount);
+  const innerZ = new Float64Array(stripCount);
+  const outerY = new Float64Array(stripCount);
+  const outerZ = new Float64Array(stripCount);
+  const normalY = new Float64Array(stripCount);
+  const normalZ = new Float64Array(stripCount);
 
   for (let i = 0; i < panels.length; i++) {
     const panel = panels[i];
     stripGamma[panel.strip] += gamma[i];
-    if (stripSeen[panel.strip] === 0) {
-      stripWidth[panel.strip] = panel.width;
-      stripChord[panel.strip] = panel.chord;
-      // Spanwise position: the bound segment's midpoint, measured along the span axis.
-      stripY[panel.strip] = 0.5 * (panel.a.z + panel.b.z);
-      stripSeen[panel.strip] = 1;
-    }
+    // The last chordwise panel of a strip is the one nearest the trailing edge, which is
+    // where the wake actually leaves.
+    stripWidth[panel.strip] = panel.width;
+    stripChord[panel.strip] = panel.chord;
+    innerY[panel.strip] = panel.a.y;
+    innerZ[panel.strip] = panel.a.z;
+    outerY[panel.strip] = panel.b.y;
+    outerZ[panel.strip] = panel.b.z;
+    normalY[panel.strip] = panel.normal.y;
+    normalZ[panel.strip] = panel.normal.z;
   }
 
-  // Lift. The bound vortices are very nearly perpendicular to the stream, so the
-  // Kutta-Joukowski force per unit span is rho * V * Gamma and the total is a sum.
+  // Lift, from Kutta-Joukowski on each bound segment. Only the component that lifts
+  // counts: a near-vertical winglet carries circulation and almost no lift, which is
+  // exactly what distinguishes it from more span.
   let lift = 0;
-  for (let s = 0; s < stripCount; s++) lift += stripGamma[s] * stripWidth[s];
+  for (let s = 0; s < stripCount; s++) lift += stripGamma[s] * stripWidth[s] * normalY[s];
   const CL = (2 * lift) / (speed * reference.area);
 
-  // Trefftz plane: the wake is a flat sheet of trailing vorticity, and the induced drag
-  // is the kinetic energy it leaves behind.
+  /*
+   * Induced drag from the Trefftz plane, treated properly as two-dimensional.
+   *
+   * The wake is a sheet of trailing vorticity, and the drag is the kinetic energy it
+   * leaves behind. Summing that along the span alone is right for one flat wing and
+   * wrong the moment anything leaves the plane: a winglet rises out of it, and a
+   * tailplane sits above or below it. Done in span only, a 747 came out with a span
+   * efficiency of 0.14 and an MD-80 with negative induced drag.
+   *
+   * A trailing filament along +x at cross-flow position (y0, z0) induces
+   * (0, -dz, dy) * Gamma / (2*pi*r^2) at (y, z). Each strip sheds +Gamma where its wake
+   * leaves the inboard edge and -Gamma at the outboard one.
+   */
   let drag = 0;
   for (let i = 0; i < stripCount; i++) {
-    let downwash = 0;
+    const y = 0.5 * (innerY[i] + outerY[i]);
+    const z = 0.5 * (innerZ[i] + outerZ[i]);
+    let vy = 0;
+    let vz = 0;
     for (let j = 0; j < stripCount; j++) {
-      // Each strip sheds a trailing vortex at each of its edges, of equal and opposite
-      // strength: that is what makes the sheet.
-      const half = stripWidth[j] / 2;
-      for (const [edge, sign] of [[stripY[j] - half, 1], [stripY[j] + half, -1]] as const) {
-        const d = stripY[i] - edge;
-        if (Math.abs(d) < 1e-9) continue;
-        // A trailing filament along +x at spanwise station z0 induces a vertical
-        // velocity -Gamma / (2*pi*(z - z0)). The minus is the downwash, and it is the
-        // reason a finite wing pays for its lift at all.
-        downwash -= (sign * stripGamma[j]) / (2 * Math.PI * d);
+      const edges: Array<[number, number, number]> = [
+        [innerY[j], innerZ[j], stripGamma[j]],
+        [outerY[j], outerZ[j], -stripGamma[j]],
+      ];
+      for (const [ey, ez, strength] of edges) {
+        const dy = y - ey;
+        const dz = z - ez;
+        const rsq = dy * dy + dz * dz;
+        if (rsq < 1e-12) continue;
+        vy += (strength * -dz) / (2 * Math.PI * rsq);
+        vz += (strength * dy) / (2 * Math.PI * rsq);
       }
     }
-    drag += stripGamma[i] * downwash * stripWidth[i];
+    const inflow = vy * normalY[i] + vz * normalZ[i];
+    drag += stripGamma[i] * inflow * stripWidth[i];
   }
   const CDi = -drag / (speed * speed * reference.area);
 
   const aspectRatio = (reference.span * reference.span) / reference.area;
   const spanEfficiency =
-    CDi > 1e-12 ? (CL * CL) / (Math.PI * aspectRatio * CDi) : 0;
+    Math.abs(CDi) > 1e-12 ? (CL * CL) / (Math.PI * aspectRatio * CDi) : 0;
 
   const strips: LatticeStrip[] = [];
   for (let s = 0; s < stripCount; s++) {
@@ -278,7 +303,7 @@ function summarise(
     // chordwise pressure distribution has to look like.
     const chord = stripChord[s];
     strips.push({
-      y: stripY[s],
+      y: 0.5 * (innerZ[s] + outerZ[s]),
       chord,
       cl: chord > 1e-9 ? (2 * stripGamma[s]) / (speed * chord) : 0,
       gamma: stripGamma[s],

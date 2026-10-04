@@ -215,12 +215,24 @@ function wingletFrames(
   return frames;
 }
 
-/** Build one half of a lifting surface as a closed, capped loft. */
-export function buildLiftingSurface(params: LiftingSurfaceParams): BufferGeometry {
+/**
+ * The spanwise stations a lifting surface is built from, and where its quarter-chord
+ * line runs.
+ *
+ * Exported because the panel model in stage 5 has to describe the same wing the mesh
+ * describes. Recomputing the planform from the spec a second time would work right up
+ * until the two drifted apart, and then the pressure map would belong to a wing that is
+ * not the one on screen.
+ */
+export interface SurfaceFrames {
+  frames: SectionFrame[];
+  /** Quarter-chord x at each frame, accumulated along the span. */
+  quarterChordX: number[];
+}
+
+export function liftingSurfaceFrames(params: LiftingSurfaceParams): SurfaceFrames {
   const stationCount = params.stations ?? 12;
-  const resolution = params.airfoilResolution ?? 26;
   const dihedral = params.dihedralDeg ?? 0;
-  const incidence = params.incidenceDeg ?? 0;
   const twist = params.twistDeg ?? 0;
   const sweep = Math.tan(params.sweepQuarterChordDeg * DEG);
 
@@ -291,6 +303,16 @@ export function buildLiftingSurface(params: LiftingSurfaceParams): BufferGeometr
     previousSpan = frame.spanPos;
     previousRise = frame.riseY;
   }
+
+
+  return { frames, quarterChordX };
+}
+
+/** Build one half of a lifting surface as a closed, capped loft. */
+export function buildLiftingSurface(params: LiftingSurfaceParams): BufferGeometry {
+  const resolution = params.airfoilResolution ?? 26;
+  const incidence = params.incidenceDeg ?? 0;
+  const { frames, quarterChordX } = liftingSurfaceFrames(params);
 
   const sign = params.mirror ? -1 : 1;
   const rings: Ring[] = frames.map((frame, index) => {
