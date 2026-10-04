@@ -112,10 +112,21 @@ export function filamentVelocity(p: Vec3, a: Vec3, b: Vec3): Vec3 {
 }
 
 /**
- * Velocity induced by one horseshoe: in from downstream along the leg at `a`, across the
- * bound segment to `b`, and back out downstream. The legs are long finite filaments
- * rather than a separate semi-infinite formula, which costs two extra evaluations and
- * removes a whole class of sign error.
+ * Velocity induced by one horseshoe, per unit circulation.
+ *
+ * The filament runs in from downstream along the leg at `b`, forward across the bound
+ * segment to `a`, and back out downstream — that is, from the outboard end to the
+ * inboard one, which is the reverse of how a caller naturally lists the two ends.
+ *
+ * That direction is the whole sign convention and it is worth stating plainly. Lift is
+ * rho * V x Gamma. With the stream along +x, lift along +y and the span along +z, a
+ * circulation vector pointing along +z gives x cross z, which is -y: a wing that pushes
+ * itself into the ground. Running the filament the other way makes positive circulation
+ * mean positive lift, which is what every formula downstream assumes. Written the
+ * natural way round first, and every test in the suite failed in the same direction.
+ *
+ * The trailing legs are long finite filaments rather than a separate semi-infinite
+ * formula: two extra evaluations, and a whole class of sign error removed.
  */
 export function horseshoeVelocity(p: Vec3, panel: LatticePanel, stream: Vec3): Vec3 {
   const far = {
@@ -126,9 +137,9 @@ export function horseshoeVelocity(p: Vec3, panel: LatticePanel, stream: Vec3): V
   const aFar = { x: panel.a.x + far.x, y: panel.a.y + far.y, z: panel.a.z + far.z };
   const bFar = { x: panel.b.x + far.x, y: panel.b.y + far.y, z: panel.b.z + far.z };
 
-  const v1 = filamentVelocity(p, aFar, panel.a);
-  const v2 = filamentVelocity(p, panel.a, panel.b);
-  const v3 = filamentVelocity(p, panel.b, bFar);
+  const v1 = filamentVelocity(p, bFar, panel.b);
+  const v2 = filamentVelocity(p, panel.b, panel.a);
+  const v3 = filamentVelocity(p, panel.a, aFar);
   return {
     x: v1.x + v2.x + v3.x,
     y: v1.y + v2.y + v3.y,
@@ -246,12 +257,15 @@ function summarise(
       for (const [edge, sign] of [[stripY[j] - half, 1], [stripY[j] + half, -1]] as const) {
         const d = stripY[i] - edge;
         if (Math.abs(d) < 1e-9) continue;
-        downwash += (sign * stripGamma[j]) / (2 * Math.PI * d);
+        // A trailing filament along +x at spanwise station z0 induces a vertical
+        // velocity -Gamma / (2*pi*(z - z0)). The minus is the downwash, and it is the
+        // reason a finite wing pays for its lift at all.
+        downwash -= (sign * stripGamma[j]) / (2 * Math.PI * d);
       }
     }
     drag += stripGamma[i] * downwash * stripWidth[i];
   }
-  const CDi = (-2 * drag) / (speed * speed * reference.area);
+  const CDi = -drag / (speed * speed * reference.area);
 
   const aspectRatio = (reference.span * reference.span) / reference.area;
   const spanEfficiency =
