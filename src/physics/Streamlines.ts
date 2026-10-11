@@ -47,6 +47,7 @@ import {
   substepCount,
   trailSegmentVertices,
 } from './particles/seeding';
+import { MAX_FRAME_SECONDS, SLOW_MOTION } from './clock';
 
 /**
  * Streamlines through the solved field.
@@ -60,27 +61,12 @@ import {
  *
  * Two honest limitations, both inherited from the solver. The field is coarse, so a
  * streamline follows the shape of the aircraft but not its boundary layer, which at this
- * resolution is thinner than a cell. And the flow is displayed in slow motion — see
- * SLOW_MOTION below.
+ * resolution is thinner than a cell. And the flow is displayed in slow motion — the
+ * whole simulation is, field and tracers on one clock; see `clock.ts`.
  */
 
 /** Trail samples per particle. One is recorded per frame. */
 const TRAIL_LENGTH = 24;
-
-/**
- * How much slower than real time the streamlines are drawn.
- *
- * At cruise the air crosses this tunnel in about a third of a second, which is not
- * something an eye can follow: the streaks would be a blur with no direction to them.
- * Everything is therefore shown at a twelfth of real speed.
- *
- * What matters is that this is a constant. Doubling the tunnel speed still doubles how
- * fast the particles travel, so the slider means what it says, and the colours are scaled
- * back out to real airspeed before they reach the legend. A speed-dependent factor would
- * have been the same mistake the flow slice made in stage 3, where the display did not
- * answer to the slider at all.
- */
-export const SLOW_MOTION = 12;
 
 /** Line opacity at the head of a trail, before the taper and the low-speed fade. */
 const TRAIL_OPACITY = 0.5;
@@ -95,12 +81,6 @@ const LIFE_TRANSITS = 2.5;
 
 /** Where along the tunnel particles are released, past the cells the inlet condition holds. */
 const INLET_FRACTION = 0.02;
-
-/**
- * A long frame must not teleport a particle across the aircraft. Anything slower than
- * this is treated as this, which makes the flow lag rather than jump.
- */
-const MAX_FRAME_SECONDS = 1 / 20;
 
 export const STREAMLINE_COUNTS = {
   low: 1024,

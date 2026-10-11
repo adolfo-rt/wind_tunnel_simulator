@@ -131,10 +131,22 @@ than off the shape. The field is built in the aircraft's own frame and query poi
 transformed into it, so rotating the model costs a matrix multiply rather than a rebuild.
 
 Everything is solved non-dimensionally with the free stream at 1. The speed slider never
-reaches the solver; it scales the readouts and how fast the streamlines are carried.
-Besides being ordinary practice in computational aerodynamics, it fixes the CFL number, so
-dragging the slider from nothing to Mach 1 cannot destabilise the solve.
-Compressibility will arrive as an analytic correction rather than being simulated.
+reaches the solver; it scales the readouts, how fast the streamlines are carried, and how
+many solver steps a frame is worth. Besides being ordinary practice in computational
+aerodynamics, it fixes the CFL number, so dragging the slider from nothing to Mach 1
+cannot destabilise the solve. Compressibility will arrive as an analytic correction rather
+than being simulated.
+
+That last one — how many steps a frame is worth — was got wrong first and is worth
+recording. The solver has no idea how much *time* a step represents, because it works at a
+free stream of exactly 1, so only the display can say. Stepping once per frame made the
+wake shed at the same rate at taxi speed as at cruise, when shedding frequency follows a
+roughly constant Strouhal number and should scale with airspeed; it also tied the flow's
+rate to the frame rate, so the same wake evolved more slowly on a slower machine. Measured
+on a 737 at 128 cells, one step per frame ran the field at 0.68× real time at 100 km/h —
+*faster* than reality — and 6.1× slow at 900 km/h, while the tracers it carried were drawn
+at a fixed twelfth of real time throughout. The number of steps is now worked out from the
+elapsed time and the airspeed, and the whole flow runs on one clock.
 
 A flow slice makes the field visible: a plane through the tunnel coloured by speed, which
 can be moved and reoriented. It is how the solver was checked before any streamlines
@@ -425,6 +437,7 @@ npm run verify:flow                               # physics of the solved field
 npm run verify:streamlines                        # physics of the tracers
 npm run verify:pressure                           # physics of the surface pressure
 npm run verify:wake                               # physics of the trailing wake
+npm run verify:clock                              # the simulation runs on one clock
 ```
 
 ## Layout

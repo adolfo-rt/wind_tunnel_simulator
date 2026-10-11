@@ -9,7 +9,8 @@ import {
   substepCount,
   trailSegmentVertices,
 } from '../src/physics/particles/seeding';
-import { SLOW_MOTION, STREAMLINE_COUNTS } from '../src/physics/Streamlines';
+import { STREAMLINE_COUNTS } from '../src/physics/Streamlines';
+import { SLOW_MOTION } from '../src/physics/clock';
 import { LEGEND_STOPS, REFERENCE_SPEED } from '../src/physics/gpu/colourRamp';
 import { SliceView } from '../src/physics/SliceView';
 

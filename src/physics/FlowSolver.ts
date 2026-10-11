@@ -288,6 +288,19 @@ export class FlowSolver {
     }
   }
 
+  /**
+   * How far the free stream travels in one step, in cells.
+   *
+   * Published because a step is the solver's only unit of time, and turning that into
+   * seconds needs the airspeed, which only the display knows. See `clock.ts`.
+   */
+  static readonly STEP_CELLS = DT_CELLS;
+
+  /** World size of one cell, which is the other half of turning a step into seconds. */
+  get cellWorld(): number {
+    return (this.advect.uniforms.uCellWorld?.value as number) ?? 0;
+  }
+
   get stats(): SolverStats {
     const { grid } = this.layout;
     return {
@@ -548,6 +561,21 @@ export class FlowSolver {
     this.buildWakeField();
   }
 
+  private resetListeners: Array<() => void> = [];
+
+  /**
+   * Told whenever the field is thrown away and started again.
+   *
+   * The display drives the solver's clock, and a field that has just been reset has to be
+   * established before a clock means anything to it. Announcing it here rather than
+   * leaving every caller of `reset` to remember is what stops a new quality tier or a
+   * resolution control quietly reintroducing a cold field running at a twentieth of a
+   * step a frame.
+   */
+  onReset(listener: () => void): void {
+    this.resetListeners.push(listener);
+  }
+
   /** Fill the domain with undisturbed flow. */
   reset(): void {
     if (!this.supported || !this.velocity || !this.pressure || !this.divergence) return;
@@ -555,6 +583,7 @@ export class FlowSolver {
     this.run(this.seed, this.velocity[0]);
     this.run(this.seed, this.velocity[1]);
     this.buildWakeField();
+    for (const listener of this.resetListeners) listener();
     this.run(this.clear, this.pressure[0]);
     this.run(this.clear, this.pressure[1]);
     this.run(this.clear, this.divergence);

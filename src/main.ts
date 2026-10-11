@@ -7,9 +7,9 @@ import { Controls } from './ui/Controls';
 import { WindTunnel } from './tunnel/Tunnel';
 import { kmhToMs } from './core/atmosphere';
 import { FlowSolver } from './physics/FlowSolver';
+import { SLOW_MOTION, SimulationClock, establishingSteps } from './physics/clock';
 import { SliceView, type SliceAxis, type SliceField } from './physics/SliceView';
 import {
-  SLOW_MOTION,
   STREAMLINE_COUNTS,
   Streamlines,
   type StreamlineDensity,
@@ -88,6 +88,7 @@ tunnel.setSpeed(kmhToMs(store.get().speedKmh));
 // ---- Flow solver ------------------------------------------------------------
 
 const solver = new FlowSolver({ renderer: viewer.renderer });
+const clock = new SimulationClock();
 const sdfBuilder = new SdfBuilder();
 const slice = new SliceView();
 viewer.world.add(slice.mesh);
@@ -242,7 +243,11 @@ function describeStreamlines(): void {
     return;
   }
   const count = streamlines.particleCount.toLocaleString();
-  streamlineNote.textContent = `${count} tracers, drawn at 1/${SLOW_MOTION} real time.`;
+  // One clock for the whole flow now, not just for the tracers: the solver is stepped
+  // the number of times this frame's elapsed time and airspeed are worth.
+  streamlineNote.textContent =
+    `${count} tracers. The whole flow runs at 1/${SLOW_MOTION} real time, so the wake ` +
+    `sheds faster as the tunnel speeds up, as it does in life.`;
 }
 
 streamlines.setVisible(streamlinesEnabled.checked);
@@ -284,12 +289,44 @@ if (!solver.supported) {
   updateLegendVisibility();
 }
 
+/**
+ * Let the flow establish itself before the clock applies.
+ *
+ * Two transits of the working section, run flat out. Until the free stream has reached
+ * the far end and the pressure field has settled behind it there is no physical state
+ * whose rate of change means anything, so there is nothing for a clock to scale - and at
+ * 100 km/h the honest rate is a twentieth of a step a frame, which would be correct and
+ * leave the tunnel empty for half a minute.
+ */
+function settleFlow(): void {
+  clock.establish(establishingSteps(solver.stats.grid.x, FlowSolver.STEP_CELLS));
+}
+
+solver.onReset(settleFlow);
+
 viewer.onFrame((delta, elapsed) => {
   tunnel.update(delta);
   controls.setRpm(tunnel.rpm, elapsed);
 
   if (solver.supported && current) {
-    solver.step();
+    /*
+     * How many steps this frame is worth, rather than one and hope.
+     *
+     * The solver has no idea how much time a step represents - it works at a free stream
+     * of exactly 1 - so the display has to say, because only the display knows the
+     * airspeed. Stepping once a frame made the wake shed at the same rate at taxi speed
+     * as at cruise, and tied its rate to the frame rate as well.
+     */
+    // Asked once and held: the clock consumes the frame's elapsed time when asked, so
+    // calling it from the loop condition spends a fresh frame on every iteration. It did,
+    // and the flow ran about sixty per cent fast at mid throttle.
+    const steps = clock.stepsFor({
+      seconds: delta,
+      freeStream: kmhToMs(store.get().speedKmh),
+      cellWorld: solver.cellWorld,
+      stepCells: FlowSolver.STEP_CELLS,
+    });
+    for (let i = 0; i < steps; i++) solver.step();
     // Handed over every frame rather than bound once: the published field is a target
     // of its own now, but it is still reallocated whenever the grid is resized, and a
     // borrower holding the old one would quietly draw a field nothing is writing to.
