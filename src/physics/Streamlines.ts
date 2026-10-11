@@ -42,10 +42,12 @@ import {
   chordCells,
   discSeeds,
   particleTextureSize,
+  rakeSeeds,
   recordCount,
   startFractions,
   substepCount,
   trailSegmentVertices,
+  type DiscPoint,
 } from './particles/seeding';
 
 /**
@@ -63,6 +65,15 @@ import {
  * resolution is thinner than a cell. And the flow is displayed in slow motion — see
  * SLOW_MOTION below.
  */
+
+/**
+ * Share of the tracers moved onto the rake when one is set.
+ *
+ * A quarter is enough to draw two well-populated spirals and leaves the rest of the
+ * tunnel still described. Taking more thins the general picture for no extra detail: the
+ * cluster is only a few metres across and saturates long before the tracers run out.
+ */
+const RAKE_SHARE = 0.25;
 
 /** Trail samples per particle. One is recorded per frame. */
 const TRAIL_LENGTH = 24;
@@ -140,6 +151,9 @@ export class Streamlines {
   private count: number;
   private texture = { width: 1, height: 1 };
   private domain = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
+  private rake: DiscPoint[] = [];
+  private rakeRadius = 1;
+  private inletRadius = 1;
   private freeStream = 0;
   private maxTextureSize = 4096;
 
@@ -295,6 +309,7 @@ export class Streamlines {
   ): void {
     this.domain = domain.clone();
     this.maxTextureSize = maxTextureSize;
+    this.inletRadius = inletRadius;
     const size = domain.getSize(new Vector3());
 
     this.allocate();
@@ -381,6 +396,28 @@ export class Streamlines {
   }
 
   /**
+   * Put a rake of tracers where a feature is, instead of spreading them all over the
+   * inlet.
+   *
+   * Pass the cross-tunnel positions of what is worth surveying — for stage 6 that is
+   * where each side's wake has rolled up — and a radius that straddles it. Pass nothing
+   * to go back to the plain disc.
+   *
+   * The release points are in world units in the inlet plane, because the flow is almost
+   * entirely streamwise: a tracer let go at the vortex's own height and spanwise station
+   * arrives at the vortex.
+   */
+  setRake(centres: readonly DiscPoint[] | null, radius: number): void {
+    this.rake = centres ? [...centres] : [];
+    this.rakeRadius = Math.max(radius, 1e-6);
+    this.seedParticles(this.inletRadius);
+  }
+
+  get raked(): boolean {
+    return this.rake.length > 0;
+  }
+
+  /**
    * Fixed spawn points, one per particle.
    *
    * Fixed rather than drawn afresh each time so that a particle retraces the same
@@ -394,8 +431,21 @@ export class Streamlines {
     const { width, height } = this.texture;
     const total = width * height;
     const size = this.domain.getSize(new Vector3());
-    const points = discSeeds(total, inletRadius * 0.97);
     const stagger = startFractions(total);
+
+    /*
+     * A quarter of the tracers go on the rake, when there is one, and they are taken from
+     * the end of the sequence rather than added to it. The particle count is what sets
+     * the cost of a frame and what the quality tiers are chosen on, so a rake that added
+     * tracers would quietly make the high tier a different tier.
+     *
+     * The stagger is left alone. It is a separate low-discrepancy sequence, and pairing a
+     * reordered set of release points with it is exactly the mistake that made stage 4's
+     * tracers form a spiral sheet.
+     */
+    const rake = this.rake.length > 0 ? Math.floor(total * RAKE_SHARE) : 0;
+    const points = discSeeds(total - rake, inletRadius * 0.97);
+    points.push(...rakeSeeds(rake, this.rake, this.rakeRadius));
 
     const data = new Float32Array(total * 4);
     for (let i = 0; i < total; i++) {

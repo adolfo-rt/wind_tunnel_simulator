@@ -505,6 +505,18 @@ export class FlowSolver {
   }
 
   /**
+   * Core radius of a trailing vortex, in world units.
+   *
+   * Exposed because anything surveying the wake has to be sized against it: a rake of
+   * tracers released well inside the core would turn together like a solid body, and one
+   * released far outside it would drift rather than spiral.
+   */
+  get wakeCoreRadius(): number {
+    const uniform = this.advect.uniforms.uWakeCore;
+    return (uniform?.value as number) ?? 0;
+  }
+
+  /**
    * Evaluate the wake's induced velocity over the whole grid.
    *
    * Once per aircraft, attitude or grid change rather than once per step: a few dozen

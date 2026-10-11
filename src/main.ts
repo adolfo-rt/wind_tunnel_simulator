@@ -7,7 +7,7 @@ import { Controls } from './ui/Controls';
 import { WindTunnel } from './tunnel/Tunnel';
 import { kmhToMs } from './core/atmosphere';
 import { FlowSolver } from './physics/FlowSolver';
-import { SliceView, type SliceAxis } from './physics/SliceView';
+import { SliceView, type SliceAxis, type SliceField } from './physics/SliceView';
 import {
   SLOW_MOTION,
   STREAMLINE_COUNTS,
@@ -93,14 +93,23 @@ const pressure = new SurfacePressure();
 const flowStatus = document.getElementById('flow-status') as HTMLElement;
 const legendTicks = document.getElementById('legend-ticks') as HTMLElement;
 const sliceLegend = document.getElementById('slice-legend') as HTMLElement;
+const legendCaption = document.getElementById('legend-caption') as HTMLElement;
+const crossflowLegend = document.getElementById('crossflow-legend') as HTMLElement;
+const crossflowTicks = document.getElementById('crossflow-ticks') as HTMLElement;
 
-legendTicks.replaceChildren(
-  ...SliceView.LEGEND_STOPS.map((speed) => {
-    const tick = document.createElement('span');
-    tick.textContent = String(Math.round(speed));
-    return tick;
-  }),
-);
+const labelTicks = (into: HTMLElement, stops: readonly number[]) =>
+  into.replaceChildren(
+    ...stops.map((speed) => {
+      const tick = document.createElement('span');
+      // To the precision the stop actually has. Rounding 12.5 to 13 beside a 6.3 reads
+      // as two different scales on one bar.
+      tick.textContent = Number.isInteger(speed) ? String(speed) : speed.toFixed(1);
+      return tick;
+    }),
+  );
+
+labelTicks(legendTicks, SliceView.LEGEND_STOPS);
+labelTicks(crossflowTicks, SliceView.CROSSFLOW_LEGEND_STOPS);
 const pressureEnabled = document.getElementById('pressure-enabled') as HTMLInputElement;
 const pressureLegend = document.getElementById('pressure-legend') as HTMLElement;
 const pressureTicks = document.getElementById('pressure-ticks') as HTMLElement;
@@ -116,7 +125,9 @@ pressureTicks.replaceChildren(
 const sliceEnabled = document.getElementById('slice-enabled') as HTMLInputElement;
 const slicePosition = document.getElementById('slice-position') as HTMLInputElement;
 const axisButtons = [...document.querySelectorAll<HTMLButtonElement>('#slice-axes .axis')];
+const fieldButtons = [...document.querySelectorAll<HTMLButtonElement>('#slice-fields .axis')];
 const streamlinesEnabled = document.getElementById('streamlines-enabled') as HTMLInputElement;
+const rakeEnabled = document.getElementById('rake-enabled') as HTMLInputElement;
 const streamlineNote = document.getElementById('streamline-note') as HTMLElement;
 const densityButtons = [
   ...document.querySelectorAll<HTMLButtonElement>('#streamline-density .axis'),
@@ -127,13 +138,25 @@ slice.setPosition(Number(slicePosition.value) / 1000);
 slice.setFreeStream(kmhToMs(store.get().speedKmh));
 
 /**
- * One legend for both. The streamlines and the slice are coloured from the same field
- * through the same ramp, so the bar means the same thing for either, and it should be
- * there whenever there is something on screen to read it against.
+ * One legend for both, until the slice stops measuring the same thing.
+ *
+ * The streamlines and the slice are coloured from the same field through the same ramp,
+ * so one bar means the same thing for either and belongs on screen whenever there is
+ * something to read it against. Switch the slice to cross-flow and that stops being true:
+ * it is then a different quantity on a different anchor, and sharing the bar would be
+ * tidier and untrue — the same mistake Cp was given its own legend to avoid. So the
+ * cross-flow bar replaces the speed bar when nothing else is using it, and joins it when
+ * the streamlines are still on the speed ramp.
  */
 const updateLegendVisibility = () => {
-  const showing = sliceEnabled.checked || streamlinesEnabled.checked;
+  const sliceOnSpeed = sliceEnabled.checked && slice.showing === 'speed';
+  const sliceOnCrossFlow = sliceEnabled.checked && slice.showing === 'crossflow';
+  const showing = sliceOnSpeed || streamlinesEnabled.checked;
   sliceLegend.hidden = !showing || !solver.supported;
+  crossflowLegend.hidden = !sliceOnCrossFlow || !solver.supported;
+  legendCaption.textContent = sliceOnSpeed
+    ? 'Local airspeed, m/s — streamlines and slice alike'
+    : 'Local airspeed, m/s — the streamlines';
   // Its own legend, because Cp is a different quantity on a different scale. Sharing the
   // speed bar would have been tidier and would have said something untrue. It does not
   // depend on the grid solver, because the panel model runs on the CPU and works on any
@@ -174,6 +197,51 @@ for (const button of axisButtons) {
   });
 }
 
+/**
+ * Put the tracer rake where this aircraft's wake rolls up, if it is switched on.
+ *
+ * The stations come from the panel model's own filaments rather than from the wingtip's
+ * geometry, which is the difference between surveying the wake and guessing where it is:
+ * a wake rolls up inboard of the tip, at the centroid of the shed vorticity, so a rake on
+ * the tip itself would sit outside the vortex it was meant to find.
+ *
+ * Sized against the solver's core radius, because that is what the vortex's width is here
+ * — twice it, so the tracers straddle the core rather than turning together inside it.
+ */
+function applyRake(): void {
+  if (!solver.supported) return;
+  if (!rakeEnabled.checked || !panelModel || !current) {
+    streamlines.setRake(null, 1);
+    return;
+  }
+
+  const offset = current.group.position;
+  const centres = new Map<string, { y: number; z: number }>();
+  for (const filament of panelModel.wake) {
+    const station = { y: filament.roll.y + offset.y, z: filament.roll.z + offset.z };
+    centres.set(`${station.y.toFixed(3)}:${station.z.toFixed(3)}`, station);
+  }
+
+  const core = solver.wakeCoreRadius;
+  streamlines.setRake([...centres.values()], core > 0 ? 2 * core : 1);
+}
+
+rakeEnabled.addEventListener('change', () => {
+  applyRake();
+  // Restart rather than resume, or the trails are stitched across the jump from an old
+  // release point to a new one and the picture shows lines no particle ever took.
+  streamlines.reset();
+  describeStreamlines();
+});
+
+for (const button of fieldButtons) {
+  button.addEventListener('click', () => {
+    for (const other of fieldButtons) other.setAttribute('aria-pressed', String(other === button));
+    slice.setField(button.dataset.field as SliceField);
+    updateLegendVisibility();
+  });
+}
+
 updateLegendVisibility();
 
 // ---- Streamlines ------------------------------------------------------------
@@ -188,9 +256,15 @@ let density: StreamlineDensity = 'medium';
  * twelve. The count is here because it is the main thing to turn down on a slow machine.
  */
 function describeStreamlines(): void {
-  streamlineNote.textContent = streamlinesEnabled.checked
-    ? `${streamlines.particleCount.toLocaleString()} tracers, drawn at 1/${SLOW_MOTION} real time.`
-    : '';
+  if (!streamlinesEnabled.checked) {
+    streamlineNote.textContent = '';
+    return;
+  }
+  const count = streamlines.particleCount.toLocaleString();
+  streamlineNote.textContent = streamlines.raked
+    ? `${count} tracers, drawn at 1/${SLOW_MOTION} real time. A quarter are on the rake, ` +
+      `released where the wake rolls up rather than across the whole inlet.`
+    : `${count} tracers, drawn at 1/${SLOW_MOTION} real time.`;
 }
 
 streamlines.setVisible(streamlinesEnabled.checked);
@@ -224,7 +298,9 @@ if (!solver.supported) {
   flowStatus.textContent = `Flow solver unavailable: ${solver.unsupportedReason}. An analytic model arrives in stage 7.`;
   sliceEnabled.disabled = true;
   slicePosition.disabled = true;
+  for (const button of fieldButtons) button.disabled = true;
   streamlinesEnabled.disabled = true;
+  rakeEnabled.disabled = true;
   streamlines.setVisible(false);
   for (const button of densityButtons) button.disabled = true;
   streamlineNote.textContent = '';
@@ -336,6 +412,7 @@ async function load(spec: AircraftSpec): Promise<void> {
     // and there is no point evaluating an empty one and then doing it again.
     solver.setWake(panelModel.wake);
     solver.setModelMatrix(built.group.matrixWorld);
+    applyRake();
     solver.setObstacle(null);
     obstacle = null;
     flowStatus.textContent = 'Building the obstacle field…';

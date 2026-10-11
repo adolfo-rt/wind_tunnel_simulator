@@ -10,7 +10,13 @@ import {
   type Texture,
 } from 'three';
 import { ATLAS_GLSL, type AtlasLayout } from './gpu/atlas';
-import { LEGEND_STOPS, REFERENCE_SPEED, SPEED_COLOUR_GLSL } from './gpu/colourRamp';
+import {
+  CROSSFLOW_LEGEND_STOPS,
+  CROSSFLOW_REFERENCE_SPEED,
+  LEGEND_STOPS,
+  REFERENCE_SPEED,
+  SPEED_COLOUR_GLSL,
+} from './gpu/colourRamp';
 
 /**
  * A cutting plane through the solved velocity field.
@@ -24,6 +30,18 @@ import { LEGEND_STOPS, REFERENCE_SPEED, SPEED_COLOUR_GLSL } from './gpu/colourRa
 
 export type SliceAxis = 'x' | 'y' | 'z';
 
+/**
+ * What the slice colours itself by.
+ *
+ * `speed` is the magnitude of the velocity, which is what the slice has always shown and
+ * what the streamlines are coloured by. `crossflow` is the part of it at right angles to
+ * the tunnel — the velocity you would measure with a rake of yaw probes, and the standard
+ * way a wind tunnel surveys a wake, because it is the only one that shows rotation. A
+ * trailing vortex is almost invisible in speed and obvious in cross-flow, for the reason
+ * written beside the cross-flow reference in `colourRamp`.
+ */
+export type SliceField = 'speed' | 'crossflow';
+
 const SLICE_FRAGMENT = /* glsl */ `
   precision highp float;
   precision highp sampler2D;
@@ -32,6 +50,7 @@ const SLICE_FRAGMENT = /* glsl */ `
   uniform float uOpacity;
   uniform float uScale;
   uniform float uFade;
+  uniform float uCrossFlow;
 
   in vec3 vWorld;
   out vec4 fragColor;
@@ -48,8 +67,12 @@ const SLICE_FRAGMENT = /* glsl */ `
     // by the tunnel's actual speed turns it back into metres per second, which is what
     // makes the slice answer to the slider: with the fans stopped there is no flow, and
     // the slice should say so rather than showing the shape of a flow that is not there.
-    float speed = length(v) * uScale;
-    fragColor = vec4(speedColour(speed), uOpacity * uFade);
+    //
+    // The tunnel runs along x, so the cross-flow is what is left in y and z. The scale
+    // carries the choice of reference as well as the tunnel speed, so the two quantities
+    // reach the same ramp already in their own units.
+    float shown = (uCrossFlow > 0.5 ? length(v.yz) : length(v)) * uScale;
+    fragColor = vec4(speedColour(shown), uOpacity * uFade);
   }
 `;
 
@@ -70,6 +93,8 @@ export class SliceView {
   /** Where the plane sits along its axis, 0 to 1 across the domain. */
   private position = 0.5;
   private domain: Box3 | null = null;
+  private field: SliceField = 'speed';
+  private freeStream = 0;
 
   constructor() {
     this.material = new ShaderMaterial({
@@ -89,6 +114,7 @@ export class SliceView {
         uOpacity: { value: 0.92 },
         uScale: { value: 1 },
         uFade: { value: 1 },
+        uCrossFlow: { value: 0 },
       },
     });
 
@@ -127,10 +153,28 @@ export class SliceView {
    * happening.
    */
   setFreeStream(metresPerSecond: number): void {
-    this.material.uniforms.uScale.value = metresPerSecond / SliceView.REFERENCE_SPEED;
+    this.freeStream = metresPerSecond;
+    this.applyScale();
     // Below a walking pace there is nothing worth looking at; fade out rather than
     // leaving a flat dark rectangle across the tunnel.
     this.material.uniforms.uFade.value = Math.min(1, metresPerSecond / 6);
+  }
+
+  /** Colour by speed, or by the cross-flow that shows rotation. */
+  setField(field: SliceField): void {
+    this.field = field;
+    this.material.uniforms.uCrossFlow.value = field === 'crossflow' ? 1 : 0;
+    this.applyScale();
+  }
+
+  get showing(): SliceField {
+    return this.field;
+  }
+
+  private applyScale(): void {
+    const reference =
+      this.field === 'crossflow' ? CROSSFLOW_REFERENCE_SPEED : SliceView.REFERENCE_SPEED;
+    this.material.uniforms.uScale.value = this.freeStream / reference;
   }
 
   /** Speed the colour ramp is anchored to, in m/s. Shared with the streamlines. */
@@ -138,6 +182,9 @@ export class SliceView {
 
   /** Where the ramp's colours sit, in m/s, which is what the legend labels. */
   static readonly LEGEND_STOPS = LEGEND_STOPS;
+
+  /** The same ramp read as cross-flow, which needs its own anchor and its own legend. */
+  static readonly CROSSFLOW_LEGEND_STOPS = CROSSFLOW_LEGEND_STOPS;
 
   setAxis(axis: SliceAxis): void {
     this.axis = axis;

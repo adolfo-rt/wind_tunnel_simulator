@@ -423,6 +423,12 @@ html, body {
 
 .axis-group { display: flex; gap: 3px; }
 
+/* On its own row under the position slider, where the head row has no space left. */
+.field-group { margin-top: 8px; justify-content: flex-start; }
+
+/* Secondary to the streamline switch above it, and indented to say so. */
+.rake-switch { margin: 7px 0 0 20px; }
+
 .axis {
   padding: 4px 8px;
   border: 1px solid var(--panel-border);

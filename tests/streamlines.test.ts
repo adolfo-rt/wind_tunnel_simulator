@@ -4,6 +4,7 @@ import {
   chordCells,
   discSeeds,
   particleTextureSize,
+  rakeSeeds,
   recordCount,
   startFractions,
   substepCount,
@@ -220,5 +221,55 @@ describe('the colour ramp is shared', () => {
 
   it('puts the free stream in the middle of the ramp', () => {
     expect(LEGEND_STOPS[2]).toBe(REFERENCE_SPEED);
+  });
+});
+
+describe('the tip rake', () => {
+  /*
+   * A rake is only useful if its tracers end up where the feature is. These are the two
+   * ways that goes wrong: the cluster lands somewhere other than the station asked for,
+   * or it is the wrong size and the tracers either all sit inside the core and turn
+   * together like a solid body, or all sit outside it and merely drift.
+   */
+  it('clusters on the stations it is given', () => {
+    const centres = [
+      { y: 2, z: -14 },
+      { y: 2, z: 14 },
+    ];
+    const points = rakeSeeds(64, centres, 3);
+    expect(points).toHaveLength(64);
+
+    for (const point of points) {
+      const nearest = centres.reduce((best, c) =>
+        Math.hypot(point.y - c.y, point.z - c.z) < Math.hypot(point.y - best.y, point.z - best.z)
+          ? c
+          : best,
+      );
+      expect(Math.hypot(point.y - nearest.y, point.z - nearest.z)).toBeLessThanOrEqual(3 + 1e-9);
+    }
+
+    // Both stations used, and used evenly: a rake that put everything on one wing would
+    // survey one vortex and claim to survey two.
+    const left = points.filter((p) => p.z < 0).length;
+    expect(left).toBe(points.length - left);
+  });
+
+  /* Straddling means reaching the edge, not hugging the middle. */
+  it('reaches out to the radius it is given', () => {
+    const points = rakeSeeds(200, [{ y: 0, z: 0 }], 4);
+    const furthest = Math.max(...points.map((p) => Math.hypot(p.y, p.z)));
+    expect(furthest).toBeGreaterThan(3.8);
+    expect(furthest).toBeLessThanOrEqual(4 + 1e-9);
+  });
+
+  /* Deterministic, like every other seed in this file: a tracer retraces its own path. */
+  it('is the same rake every time', () => {
+    const centres = [{ y: 1, z: -9 }];
+    expect(rakeSeeds(32, centres, 2)).toEqual(rakeSeeds(32, centres, 2));
+  });
+
+  it('asks for nothing when there is nothing to survey', () => {
+    expect(rakeSeeds(32, [], 2)).toEqual([]);
+    expect(rakeSeeds(0, [{ y: 0, z: 0 }], 2)).toEqual([]);
   });
 });

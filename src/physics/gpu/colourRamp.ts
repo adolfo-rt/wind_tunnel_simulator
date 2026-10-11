@@ -21,6 +21,26 @@ export const RAMP_STOPS = [0, 0.5, 1.0, 1.4, 2.0];
 export const LEGEND_STOPS = RAMP_STOPS.map((s) => s * REFERENCE_SPEED);
 
 /**
+ * The reference the cross-flow view is anchored to: a twentieth of the free stream.
+ *
+ * Cross-flow is the part of the velocity at right angles to the tunnel, and it is a
+ * different quantity on a different scale from speed, so it cannot share speed's anchor.
+ * This one is derived rather than picked. The swirl in a trailing vortex is a few percent
+ * of the free stream - measured on a 747 at the default grid, 7.8% at the core and 3.8%
+ * in the sheet between the tips - so anchoring the ramp at 5% puts the cores above the
+ * middle of it and the sheet below, which is the distinction worth seeing.
+ *
+ * It also explains why colouring a cross-flow plane by *speed* shows nothing of a vortex.
+ * The swirl is at right angles to the free stream, so it adds in quadrature: 8% of
+ * cross-flow changes the magnitude of the velocity by three parts in ten thousand. The
+ * wake's slow core shows up; the rotation in it does not.
+ */
+export const CROSSFLOW_REFERENCE_SPEED = 0.05 * REFERENCE_SPEED;
+
+/** Cross-flow legend labels, in m/s, on the same ramp as speed. */
+export const CROSSFLOW_LEGEND_STOPS = RAMP_STOPS.map((s) => s * CROSSFLOW_REFERENCE_SPEED);
+
+/**
  * Deliberately not a rainbow. A perceptually ordered ramp means "brighter is faster"
  * reads correctly, whereas a rainbow invents boundaries where the data is smooth.
  */

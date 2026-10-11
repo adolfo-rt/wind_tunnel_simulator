@@ -336,6 +336,30 @@ there, so winding it up moves no force; the test suite holds the model to that b
 that the rolled and unrolled wakes agree further and further out, at a rate which says
 their circulation and their centroid both match.
 
+### Seeing it
+
+Two instruments, because the wake is small and the tunnel is not.
+
+A **cross-flow slice**. The flow slice can colour itself by the part of the velocity at
+right angles to the tunnel instead of by speed, which is how a real tunnel surveys a wake
+— a rake of yaw probes, because that is the only quantity that shows rotation. Put a
+*Cross* slice behind the wing and the two vortex cores appear as bright spots against the
+sheet between them, at about two to one on the default grid.
+
+Colouring that same plane by **speed** shows nothing of the vortex, and the reason is
+worth knowing rather than discovering. The swirl is at right angles to the free stream, so
+it adds in quadrature: eight per cent of cross-flow changes the magnitude of the velocity
+by three parts in ten thousand. The slow core of the wake shows up; the rotation in it
+does not.
+
+A **tip rake**. Switched on, a quarter of the tracers are released from two clusters
+instead of across the whole inlet, so they are caught in the vortices and wind into
+spirals. The clusters go where the panel model says the wake rolls up, not on the wingtip
+— a wake rolls up inboard of the tip, so a rake on the tip would sit outside the vortex it
+was meant to find — and they are sized at twice the core radius, so the tracers straddle
+the core. Released well inside it they would all turn together, as a solid body does, and
+show nothing.
+
 ### One field, not two
 
 The wake's induced velocity is evaluated once into the same grid the solver uses and added

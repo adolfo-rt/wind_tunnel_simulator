@@ -97,6 +97,13 @@
               </button>
             </div>
           </div>
+          <label class="switch rake-switch">
+            <input type="checkbox" id="rake-enabled" />
+            <span
+              title="Move a quarter of the tracers onto a rake at the wingtips, where the wake rolls up. A tunnel that wants to see one feature puts its smoke where the feature is."
+              >Tip rake</span
+            >
+          </label>
           <p class="flow-note" id="streamline-note"></p>
 
           <div class="flow-head">
@@ -149,10 +156,46 @@
             value="500"
             aria-label="Position of the flow slice"
           />
+          <div
+            class="axis-group field-group"
+            id="slice-fields"
+            role="group"
+            aria-label="What the slice measures"
+          >
+            <button
+              type="button"
+              class="axis"
+              data-field="speed"
+              aria-pressed="true"
+              title="Colour the slice by how fast the air is moving."
+            >
+              Speed
+            </button>
+            <button
+              type="button"
+              class="axis"
+              data-field="crossflow"
+              aria-pressed="false"
+              title="Colour the slice by the flow across the tunnel, which is what shows rotation. Put a Cross slice behind the wing to see the tip vortices."
+            >
+              Cross-flow
+            </button>
+          </div>
           <div class="legend" id="slice-legend">
             <div class="legend-bar legend-bar-speed"></div>
             <div class="legend-ticks" id="legend-ticks"></div>
-            <p class="legend-caption">Local airspeed, m/s — streamlines and slice alike</p>
+            <p class="legend-caption" id="legend-caption">
+              Local airspeed, m/s — streamlines and slice alike
+            </p>
+          </div>
+          <div class="legend" id="crossflow-legend" hidden>
+            <div class="legend-bar legend-bar-speed"></div>
+            <div class="legend-ticks" id="crossflow-ticks"></div>
+            <p class="legend-caption">
+              Flow across the tunnel, m/s — the part of the velocity that is not going
+              downstream, so a vortex shows and a wake does not. A Cross slice behind the
+              wing gives the two tip vortices.
+            </p>
           </div>
           <p class="flow-status" id="flow-status">Solver starting…</p>
         </div>
