@@ -237,8 +237,9 @@ viewer.onFrame((delta, elapsed) => {
 
   if (solver.supported && current) {
     solver.step();
-    // The solver ping-pongs its targets, so the finished field is a different texture
-    // each step and has to be handed over again rather than bound once.
+    // Handed over every frame rather than bound once: the published field is a target
+    // of its own now, but it is still reallocated whenever the grid is resized, and a
+    // borrower holding the old one would quietly draw a field nothing is writing to.
     slice.setVelocity(solver.velocityTexture);
     streamlines.setVelocity(solver.velocityTexture);
     streamlines.step(delta);
