@@ -527,6 +527,7 @@ declare global {
       solver: FlowSolver;
       slice: SliceView;
       streamlines: Streamlines;
+      rake: StreamlineRake;
       /** How much slower than real time the streamlines are drawn. */
       slowMotion: number;
       store: Store<AppState>;
@@ -565,6 +566,7 @@ window.windTunnel = {
   solver,
   slice,
   streamlines,
+  rake,
   slowMotion: SLOW_MOTION,
   store,
   select,

@@ -439,6 +439,7 @@ npm run verify:flow                               # physics of the solved field
 npm run verify:streamlines                        # physics of the tracers
 npm run verify:pressure                           # physics of the surface pressure
 npm run verify:wake                               # physics of the trailing wake
+npm run verify:rake                               # physics of the streamline rake
 ```
 
 ## Layout

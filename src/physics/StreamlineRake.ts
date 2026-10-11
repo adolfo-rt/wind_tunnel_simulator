@@ -181,6 +181,30 @@ export class StreamlineRake {
     return this.lines.length;
   }
 
+  /**
+   * Every point of every ribbon, for checking rather than drawing.
+   *
+   * A streamline that passes through the aeroplane is the most convincing wrong picture
+   * this code could draw - it looks entirely orderly - so `verify:rake` reads these back
+   * and measures them against the distance field rather than trusting that the velocity
+   * being zero inside a solid was enough to stop the trace.
+   */
+  paths(): Array<Array<[number, number, number]>> {
+    return this.lines.map((line) => {
+      const attribute = line.geometry.getAttribute('instanceStart');
+      const out: Array<[number, number, number]> = [];
+      for (let i = 0; i < attribute.count; i++) {
+        out.push([attribute.getX(i), attribute.getY(i), attribute.getZ(i)]);
+      }
+      const end = line.geometry.getAttribute('instanceEnd');
+      if (end.count > 0) {
+        const last = end.count - 1;
+        out.push([end.getX(last), end.getY(last), end.getZ(last)]);
+      }
+      return out;
+    });
+  }
+
   dispose(): void {
     for (const line of this.lines) {
       this.group.remove(line);
