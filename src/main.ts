@@ -8,6 +8,7 @@ import { WindTunnel } from './tunnel/Tunnel';
 import { kmhToMs } from './core/atmosphere';
 import { FlowSolver } from './physics/FlowSolver';
 import { SliceView, type SliceAxis, type SliceField } from './physics/SliceView';
+import { StreamlineRake } from './physics/StreamlineRake';
 import {
   SLOW_MOTION,
   STREAMLINE_COUNTS,
@@ -82,6 +83,7 @@ store.subscribe((state) => {
   // it to decide how far a particle travels.
   slice.setFreeStream(kmhToMs(state.speedKmh));
   streamlines.setFreeStream(kmhToMs(state.speedKmh));
+  rake.setFreeStream(kmhToMs(state.speedKmh));
 });
 tunnel.setSpeed(kmhToMs(store.get().speedKmh));
 
@@ -94,6 +96,10 @@ viewer.world.add(slice.mesh);
 
 const streamlines = new Streamlines({ renderer: viewer.renderer });
 viewer.world.add(streamlines.group);
+
+const rake = new StreamlineRake();
+viewer.world.add(rake.group);
+viewer.onResized((width, height) => rake.setResolution(width, height));
 // The streamlines have to agree with the solver about the grid, the domain and where the
 // aircraft is, down to the metre. Borrowing the uniforms rather than copying them means
 // they cannot fall out of step later.
@@ -146,6 +152,8 @@ const axisButtons = [...document.querySelectorAll<HTMLButtonElement>('#slice-axe
 const fieldButtons = [...document.querySelectorAll<HTMLButtonElement>('#slice-fields .axis')];
 const streamlinesEnabled = document.getElementById('streamlines-enabled') as HTMLInputElement;
 const rakeEnabled = document.getElementById('rake-enabled') as HTMLInputElement;
+const rakePlane = document.getElementById('rake-plane') as HTMLInputElement;
+const rakeNote = document.getElementById('rake-note') as HTMLElement;
 const streamlineNote = document.getElementById('streamline-note') as HTMLElement;
 const densityButtons = [
   ...document.querySelectorAll<HTMLButtonElement>('#streamline-density .axis'),
@@ -215,41 +223,75 @@ for (const button of axisButtons) {
   });
 }
 
-/**
- * Put the tracer rake where this aircraft's wake rolls up, if it is switched on.
+/*
+ * Trace the rake through the field as it stands.
  *
- * The stations come from the panel model's own filaments rather than from the wingtip's
- * geometry, which is the difference between surveying the wake and guessing where it is:
- * a wake rolls up inboard of the tip, at the centroid of the shed vorticity, so a rake on
- * the tip itself would sit outside the vortex it was meant to find.
+ * Reading the velocity field back to the CPU stalls the pipeline, so this is deliberately
+ * not a per-frame operation — and it does not need to be. A streamline's shape depends on
+ * the field, the aircraft and where the plane is cut, and on nothing else: the solve is
+ * non-dimensional, so moving the speed slider changes the colours and not one coordinate.
  *
- * Sized against the solver's core radius, because that is what the vortex's width is here
- * — twice it, so the tracers straddle the core rather than turning together inside it.
+ * Which leaves the field itself, and it is still settling for the first few seconds after
+ * an aircraft appears. Hence the schedule below rather than a single trace.
  */
-function applyRake(): void {
-  if (!solver.supported) return;
-  if (!rakeEnabled.checked || !panelModel || !current) {
-    streamlines.setRake(null, 1);
+function traceRake(): void {
+  if (!solver.supported || !rake.visible) return;
+  const read = solver.readVelocity();
+  if (!read) return;
+
+  const size = solver.domain.getSize(new Vector3());
+  rake.rebuild({
+    data: read.data,
+    grid: read.grid,
+    min: solver.domain.min,
+    size: { x: size.x, y: size.y, z: size.z },
+  });
+  describeRake();
+}
+
+/**
+ * Re-trace while the solver is still settling, then stop.
+ *
+ * Geometrically spaced rather than a steady tick: the field changes fastest just after
+ * the aircraft appears and barely at all a few seconds later, so this spends its effort
+ * where the picture is still moving and then costs nothing at all.
+ */
+const RAKE_SETTLING_MS = [250, 750, 1750, 3750, 7750];
+let rakeTimers: ReturnType<typeof setTimeout>[] = [];
+
+function retraceRake(): void {
+  for (const timer of rakeTimers) clearTimeout(timer);
+  rakeTimers = [];
+  if (!rake.visible) return;
+  traceRake();
+  rakeTimers = RAKE_SETTLING_MS.map((delay) => setTimeout(traceRake, delay));
+}
+
+function describeRake(): void {
+  if (!rakeEnabled.checked) {
+    rakeNote.textContent = '';
     return;
   }
-
-  const offset = current.group.position;
-  const centres = new Map<string, { y: number; z: number }>();
-  for (const filament of panelModel.wake) {
-    const station = { y: filament.roll.y + offset.y, z: filament.roll.z + offset.z };
-    centres.set(`${station.y.toFixed(3)}:${station.z.toFixed(3)}`, station);
-  }
-
-  const core = solver.wakeCoreRadius;
-  streamlines.setRake([...centres.values()], core > 0 ? 2 * core : 1);
+  const metres = rake.planeWorld;
+  const where =
+    Math.abs(metres) < 0.5
+      ? 'on the centreline'
+      : `${Math.abs(metres).toFixed(1)} m ${metres > 0 ? 'right' : 'left'} of the centreline`;
+  rakeNote.textContent =
+    `${rake.lineCount} streamlines ${where}. These are true streamlines — tangent to the ` +
+    `field as it stands — where the tracers above are pathlines. Their shape does not ` +
+    `change with the tunnel speed, only their colour.`;
 }
 
 rakeEnabled.addEventListener('change', () => {
-  applyRake();
-  // Restart rather than resume, or the trails are stitched across the jump from an old
-  // release point to a new one and the picture shows lines no particle ever took.
-  streamlines.reset();
-  describeStreamlines();
+  rake.setVisible(rakeEnabled.checked);
+  retraceRake();
+  describeRake();
+});
+
+rakePlane.addEventListener('input', () => {
+  rake.setPlane(Number(rakePlane.value) / Number(rakePlane.max));
+  retraceRake();
 });
 
 for (const button of fieldButtons) {
@@ -279,14 +321,12 @@ function describeStreamlines(): void {
     return;
   }
   const count = streamlines.particleCount.toLocaleString();
-  streamlineNote.textContent = streamlines.raked
-    ? `${count} tracers, drawn at 1/${SLOW_MOTION} real time. A quarter are on the rake, ` +
-      `released where the wake rolls up rather than across the whole inlet.`
-    : `${count} tracers, drawn at 1/${SLOW_MOTION} real time.`;
+  streamlineNote.textContent = `${count} tracers, drawn at 1/${SLOW_MOTION} real time.`;
 }
 
 streamlines.setVisible(streamlinesEnabled.checked);
 streamlines.setFreeStream(kmhToMs(store.get().speedKmh));
+rake.setFreeStream(kmhToMs(store.get().speedKmh));
 
 streamlinesEnabled.addEventListener('change', () => {
   streamlines.setVisible(streamlinesEnabled.checked);
@@ -319,6 +359,7 @@ if (!solver.supported) {
   for (const button of fieldButtons) button.disabled = true;
   streamlinesEnabled.disabled = true;
   rakeEnabled.disabled = true;
+  rakePlane.disabled = true;
   streamlines.setVisible(false);
   for (const button of densityButtons) button.disabled = true;
   streamlineNote.textContent = '';
@@ -424,16 +465,15 @@ async function load(spec: AircraftSpec): Promise<void> {
     solver.configure(domain, maxTexture);
     slice.configure(domain, solver.atlas, solver.velocityTexture);
     streamlines.configure(domain, solver.velocityTexture, radius, maxTexture);
+    rake.configure(domain);
 
     built.group.updateMatrixWorld(true);
     // The wake before the attitude: setting the model matrix evaluates the induced field,
     // and there is no point evaluating an empty one and then doing it again.
     solver.setWake(panelModel.wake);
     solver.setModelMatrix(built.group.matrixWorld);
-    // After the streamlines are configured, because the rake reseeds them, and before the
-    // note is written, because the note says whether there is a rake.
-    applyRake();
     describeStreamlines();
+    retraceRake();
     solver.setObstacle(null);
     obstacle = null;
     flowStatus.textContent = 'Building the obstacle field…';

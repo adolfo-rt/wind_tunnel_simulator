@@ -171,37 +171,3 @@ function radicalInverse(index: number): number {
   return result;
 }
 
-/**
- * Release points clustered around a few places rather than spread over the whole inlet.
- *
- * A wind tunnel that wants to see one feature does not fill the whole working section
- * with smoke; it puts a rake of probes where the feature is. The same reasoning applies
- * here for the same reason — a tip vortex is a few metres across in a tunnel seventy
- * metres wide, so tracers spread evenly over the inlet mostly miss it, and the handful
- * that do not are lost among the rest.
- *
- * Each cluster is the same sunflower spiral the full disc uses, so the points are evenly
- * spread within it and, like the disc, identical every time: a tracer retraces the same
- * path every life.
- *
- * The radius wants to straddle the core rather than sit inside it. Points released well
- * within the core all rotate together, as a solid body does, and the picture is a slowly
- * turning disc; points released across it see the swirl rise and fall and wind into a
- * spiral, which is what a vortex looks like.
- */
-export function rakeSeeds(
-  count: number,
-  centres: readonly DiscPoint[],
-  radius: number,
-): DiscPoint[] {
-  if (centres.length === 0 || count <= 0) return [];
-  const points: DiscPoint[] = [];
-  const per = Math.ceil(count / centres.length);
-  for (const centre of centres) {
-    for (const point of discSeeds(per, radius)) {
-      if (points.length >= count) break;
-      points.push({ y: centre.y + point.y, z: centre.z + point.z });
-    }
-  }
-  return points;
-}

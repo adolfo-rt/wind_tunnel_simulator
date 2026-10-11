@@ -343,8 +343,16 @@ Two instruments, because the wake is small and the tunnel is not.
 A **cross-flow slice**. The flow slice can colour itself by the part of the velocity at
 right angles to the tunnel instead of by speed, which is how a real tunnel surveys a wake
 — a rake of yaw probes, because that is the only quantity that shows rotation. Put a
-*Cross* slice behind the wing and the two vortex cores appear as bright spots against the
-sheet between them, at about two to one on the default grid.
+*Cross* slice behind the wing and the two cores show as a symmetric pair of bright spots.
+
+How well they show depends entirely on the grid, and the numbers are worth stating because
+the honest answer is "at the default resolution, yes, but they are not the brightest thing
+there". Ranking every cell on a plane fifteen metres behind a 747's roll-up station: at
+128 cells the cores read 0.139 and 0.145 of the free stream and rank 45th and 33rd of
+2,209 — the top two per cent — while the strongest cells on the plane, at 0.28, are the
+fuselage-and-fin wake on the centreline. At 64 cells the cores fall to about 0.04 and do
+not make the top ten at all. Halving the cell size halves the vortex core, which roughly
+triples its swirl, while the body wake grows by half; that is the whole difference.
 
 Colouring that same plane by **speed** shows nothing of the vortex, and the reason is
 worth knowing rather than discovering. The swirl is at right angles to the free stream, so
@@ -352,13 +360,19 @@ it adds in quadrature: eight per cent of cross-flow changes the magnitude of the
 by three parts in ten thousand. The slow core of the wake shows up; the rotation in it
 does not.
 
-A **tip rake**. Switched on, a quarter of the tracers are released from two clusters
-instead of across the whole inlet, so they are caught in the vortices and wind into
-spirals. The clusters go where the panel model says the wake rolls up, not on the wingtip
-— a wake rolls up inboard of the tip, so a rake on the tip would sit outside the vortex it
-was meant to find — and they are sized at twice the core radius, so the tracers straddle
-the core. Released well inside it they would all turn together, as a solid body does, and
-show nothing.
+A **streamline rake**. A row of release points up a vertical line in one spanwise plane,
+each drawing a single continuous ribbon — the oldest picture in the subject, and still the
+clearest way to see where the air is pushed aside, where it is squeezed and sped up, and
+where it never recovers. The plane slides across the span, so you can take it through the
+fuselage, through an engine, or out at the tip.
+
+These are *streamlines*, tangent to the field at one instant, where the tracers above are
+*pathlines* showing where particles have been. In the steady part of the flow the two
+coincide; in the unsteady wake they do not, and neither is wrong. They are traced on the
+CPU, which is what makes drawing them as thick ribbons possible — a line with width has to
+be expanded into real geometry from points something can see — and they are rebuilt rather
+than animated, because the solve is non-dimensional: a streamline's shape is identical at
+every setting of the speed slider, and only its colour changes.
 
 ### One field, not two
 
