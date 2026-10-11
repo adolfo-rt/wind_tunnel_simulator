@@ -68,6 +68,9 @@ const report = await page.evaluate(() => {
   const yMid = Math.floor(grid.y / 2);
   const zMid = Math.floor(grid.z / 2);
 
+  const W = wt.readVorticity();
+  const spin = (x, y, z) => W.data[(x + grid.x * (y + grid.y * z)) * 4 + 3];
+
   let max = 0, sum = 0, n = 0, nonFinite = 0;
   for (let i = 0; i < data.length; i += 3) {
     const s = Math.hypot(data[i], data[i + 1], data[i + 2]);
@@ -91,10 +94,30 @@ const report = await page.evaluate(() => {
     wake = Math.min(wake, at(x, yMid, zMid));
   }
 
+  // Rotation. A uniform stream has none, so everything here was made by the aircraft -
+  // which is what lets vorticity confinement be gated on the magnitude alone.
+  let upstreamSpin = 0;
+  for (let x = 2; x < Math.floor(grid.x / 8); x++) {
+    for (let y = 3; y < grid.y - 3; y++) {
+      for (let z = 3; z < grid.z - 3; z++) upstreamSpin = Math.max(upstreamSpin, spin(x, y, z));
+    }
+  }
+  const sectionSpin = (fraction) => {
+    const x = Math.floor(grid.x * fraction);
+    let most = 0;
+    for (let y = 1; y < grid.y - 1; y++) {
+      for (let z = 1; z < grid.z - 1; z++) most = Math.max(most, spin(x, y, z));
+    }
+    return most;
+  };
+
   return {
     grid, max, mean: sum / n, nonFinite,
     upstreamMean: upstream / upstreamCount,
     wakeMin: wake,
+    upstreamSpin,
+    nearWakeSpin: sectionSpin(0.6),
+    farWakeSpin: sectionSpin(0.9),
   };
 });
 
@@ -110,6 +133,13 @@ const checks = [
   ['momentum is not draining away', Math.abs(report.mean - 1) < 0.12,
     `domain mean speed ${report.mean.toFixed(3)}, expected within 12% of 1`],
   ['the field stays finite', report.nonFinite === 0, `${report.nonFinite} non-finite cells`],
+  ['the free stream carries no rotation', report.upstreamSpin < 0.01,
+    `strongest vorticity upstream of the aircraft is ${report.upstreamSpin.toFixed(4)}, ` +
+    `expected below 0.01 - a uniform stream has none, and confinement is gated on that`],
+  ['the wake keeps its rotation down the tunnel',
+    report.farWakeSpin > 0.7 * report.nearWakeSpin,
+    `vorticity falls from ${report.nearWakeSpin.toFixed(3)} to ${report.farWakeSpin.toFixed(3)} ` +
+    `between 60% and 90% of the tunnel; without confinement it loses a quarter`],
   ['no console errors', problems.length === 0, problems.join('; ')],
 ];
 

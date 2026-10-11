@@ -407,6 +407,8 @@ declare global {
       surfacePressures: () => Array<{ aero: string; cp: Float32Array }>;
       readPressure: () => { data: Float32Array; grid: { x: number; y: number; z: number } } | null;
       setWallSlip: (slip: boolean) => void;
+      setConfinement: (strength: number) => void;
+      readVorticity: () => { data: Float32Array; grid: { x: number; y: number; z: number } } | null;
       select: (id: string) => void;
       current: () => BuiltAircraft | null;
       /** Point the camera down one axis at the current aircraft. */
@@ -431,6 +433,8 @@ window.windTunnel = {
   },
   readPressure: () => solver.readPressure(),
   setWallSlip: (slip: boolean) => solver.setWallSlip(slip),
+  setConfinement: (strength: number) => solver.setConfinement(strength),
+  readVorticity: () => solver.readVorticity(),
   panelModel: () => panelModel,
   surfacePressures: () => {
     const out: Array<{ aero: string; cp: Float32Array }> = [];

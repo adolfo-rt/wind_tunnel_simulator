@@ -265,3 +265,103 @@ export const SEED_SHADER = HEADER + ATLAS_GLSL + OBSTACLE_GLSL + /* glsl */ `
 export const CLEAR_SHADER = HEADER + /* glsl */ `
   void main() { fragColor = vec4(0.0); }
 `;
+
+/**
+ * Vorticity: the local rotation of the velocity field, curl u.
+ *
+ * Zero everywhere in a uniform stream, by definition. Every bit of it in this domain was
+ * made by the aircraft, which is what makes it a natural place to gate on: anything the
+ * confinement pass below does is, by construction, confined to flow the body has already
+ * disturbed.
+ */
+export const VORTICITY_SHADER = HEADER + ATLAS_GLSL + OBSTACLE_GLSL + /* glsl */ `
+  uniform sampler2D uVelocity;
+
+  /// Zero-gradient at the domain edge, so a boundary cannot manufacture rotation.
+  vec3 neighbourVelocity(vec3 cell, vec3 offset, vec3 centre) {
+    vec3 n = cell + offset;
+    if (any(lessThan(n, vec3(0.0))) || any(greaterThan(n, uGrid - 1.0))) return centre;
+    return readCell(uVelocity, n).xyz;
+  }
+
+  void main() {
+    vec3 cell = fragmentCell();
+    if (isPaddingCell(cell)) { fragColor = vec4(0.0); return; }
+
+    vec3 centre = readCell(uVelocity, cell).xyz;
+    vec3 px = neighbourVelocity(cell, vec3( 1.0, 0.0, 0.0), centre);
+    vec3 mx = neighbourVelocity(cell, vec3(-1.0, 0.0, 0.0), centre);
+    vec3 py = neighbourVelocity(cell, vec3(0.0,  1.0, 0.0), centre);
+    vec3 my = neighbourVelocity(cell, vec3(0.0, -1.0, 0.0), centre);
+    vec3 pz = neighbourVelocity(cell, vec3(0.0, 0.0,  1.0), centre);
+    vec3 mz = neighbourVelocity(cell, vec3(0.0, 0.0, -1.0), centre);
+
+    vec3 omega = 0.5 * vec3(
+      (py.z - my.z) - (pz.y - mz.y),
+      (pz.x - mz.x) - (px.z - mx.z),
+      (px.y - mx.y) - (py.x - my.x)
+    );
+    fragColor = vec4(omega, length(omega));
+  }
+`;
+
+/**
+ * Vorticity confinement: put back the rotation the advection scheme throws away.
+ *
+ * Semi-Lagrangian advection is unconditionally stable and badly diffusive, and what it
+ * diffuses first is the smallest, tightest structure - which here means every vortex
+ * worth looking at. Confinement (Steinhoff and Underhill) measures where vorticity is
+ * concentrating, by taking the gradient of its magnitude, and adds a small force along
+ * N x omega that pushes rotation back up that gradient. It does not create vorticity; it
+ * resists the numerical scheme's tendency to smear what is already there.
+ *
+ * Gated on the magnitude of the vorticity itself. A uniform stream has none, so this
+ * cannot touch the flow arriving at the aircraft however hard it is driven - which is
+ * what stops it amplifying the numerical noise in the free stream into a tunnel full of
+ * invented turbulence. The force is also faded out inside the aircraft, where the
+ * constrain pass is about to overrule it anyway.
+ */
+export const CONFINE_SHADER = HEADER + ATLAS_GLSL + OBSTACLE_GLSL + /* glsl */ `
+  uniform sampler2D uVelocity;
+  uniform sampler2D uVorticity;
+  /// Strength, already multiplied by the time step and the cell size.
+  uniform float uConfinement;
+  /// Vorticity below this is treated as nothing happening.
+  uniform float uVorticityFloor;
+
+  float magnitudeAt(vec3 cell, vec3 offset) {
+    vec3 n = cell + offset;
+    if (any(lessThan(n, vec3(0.0))) || any(greaterThan(n, uGrid - 1.0))) {
+      return readCell(uVorticity, cell).w;
+    }
+    return readCell(uVorticity, n).w;
+  }
+
+  void main() {
+    vec3 cell = fragmentCell();
+    if (isPaddingCell(cell)) { fragColor = vec4(0.0); return; }
+
+    vec3 v = readCell(uVelocity, cell).xyz;
+    if (uConfinement <= 0.0) { fragColor = vec4(v, 0.0); return; }
+
+    vec4 vorticity = readCell(uVorticity, cell);
+    float magnitude = vorticity.w;
+
+    // Which way the vorticity is getting stronger.
+    vec3 gradient = 0.5 * vec3(
+      magnitudeAt(cell, vec3( 1.0, 0.0, 0.0)) - magnitudeAt(cell, vec3(-1.0, 0.0, 0.0)),
+      magnitudeAt(cell, vec3(0.0,  1.0, 0.0)) - magnitudeAt(cell, vec3(0.0, -1.0, 0.0)),
+      magnitudeAt(cell, vec3(0.0, 0.0,  1.0)) - magnitudeAt(cell, vec3(0.0, 0.0, -1.0))
+    );
+    float steepness = length(gradient);
+    if (steepness < 1e-8) { fragColor = vec4(v, 0.0); return; }
+
+    vec3 towards = gradient / steepness;
+    // Only where there is rotation to preserve, and never inside the aircraft.
+    float gate = smoothstep(uVorticityFloor, uVorticityFloor * 4.0, magnitude);
+    gate *= 1.0 - solidity(cell);
+
+    v += uConfinement * gate * cross(towards, vorticity.xyz);
+    fragColor = vec4(v, 0.0);
+  }
+`;

@@ -21,12 +21,14 @@ import { layoutAtlas, type AtlasLayout, type GridSize } from './gpu/atlas';
 import {
   ADVECT_SHADER,
   CLEAR_SHADER,
+  CONFINE_SHADER,
   CONSTRAIN_SHADER,
   DIVERGENCE_SHADER,
   JACOBI_SHADER,
   PROJECT_SHADER,
   SEED_SHADER,
   VERTEX_SHADER,
+  VORTICITY_SHADER,
 } from './gpu/passes';
 import type { SdfGrid } from './sdf/buildSdf';
 
@@ -54,6 +56,7 @@ export interface FlowSolverOptions {
   /** Cells along the streamwise axis. */
   resolution?: number;
   jacobiIterations?: number;
+  confinement?: number;
 }
 
 /**
@@ -76,6 +79,38 @@ export interface SolverStats {
 const DT_CELLS = 0.8;
 /** A touch of damping keeps the coarse grid from accumulating energy indefinitely. */
 const DISSIPATION = 0.999;
+
+/**
+ * Vorticity below this, in free streams per cell, counts as nothing happening.
+ *
+ * A uniform stream has no vorticity at all, so everything above the solver's own
+ * arithmetic noise was made by the aircraft. The floor only has to clear that noise.
+ */
+const VORTICITY_FLOOR = 0.004;
+
+/**
+ * How hard confinement pushes back, already carrying the time step and the cell size.
+ *
+ * Swept against the solved field on a 737 at 64 cells. The wake's vorticity, measured
+ * across sections from 55% to 92% of the tunnel:
+ *
+ *   strength   upstream max |w|   peak |w|   wake vorticity        domain mean speed
+ *   0          0.0010             0.72       0.573 -> 0.429        0.992
+ *   0.05       0.0007             0.77       0.682 -> 0.758        0.995
+ *   0.15       0.0009             1.12       erratic               0.994
+ *   0.35       0.0008             1.59       over-driven           0.997
+ *   0.70       0.3816            11.47       7.6 -> 11.5, growing  1.164
+ *
+ * Without it the wake loses a quarter of its rotation on the way down the tunnel, which
+ * is numerical diffusion rather than physics. At 0.05 it holds that rotation instead,
+ * and the free stream arriving at the aircraft is untouched - the upstream figure is the
+ * same as with confinement switched off entirely.
+ *
+ * The top of the sweep is what the gate exists to prevent: at 0.7 the force outruns the
+ * dissipation, vorticity grows all the way to the outlet, the free stream picks up four
+ * hundred times its own noise, and the domain gains a sixth of its energy from nowhere.
+ */
+const CONFINEMENT = 0.05;
 
 function makeTarget(width: number, height: number): WebGLRenderTarget {
   const target = new WebGLRenderTarget(width, height, {
@@ -107,6 +142,7 @@ export class FlowSolver {
   private velocity: [WebGLRenderTarget, WebGLRenderTarget] | null = null;
   private pressure: [WebGLRenderTarget, WebGLRenderTarget] | null = null;
   private divergence: WebGLRenderTarget | null = null;
+  private vorticity: WebGLRenderTarget | null = null;
 
   private materials: ShaderMaterial[] = [];
   private advect!: ShaderMaterial;
@@ -116,7 +152,10 @@ export class FlowSolver {
   private project!: ShaderMaterial;
   private seed!: ShaderMaterial;
   private clear!: ShaderMaterial;
+  private vorticityMaterial!: ShaderMaterial;
+  private confine!: ShaderMaterial;
 
+  private confinement = 0;
   private sdfTexture: DataTexture | null = null;
   private invModel = new Matrix4();
 
@@ -124,6 +163,7 @@ export class FlowSolver {
     this.renderer = options.renderer;
     this.resolution = options.resolution ?? 128;
     this.jacobiIterations = options.jacobiIterations ?? 20;
+    this.confinement = options.confinement ?? CONFINEMENT;
 
     const probe = probeSupport(options.renderer);
     this.supported = probe === null;
@@ -131,6 +171,7 @@ export class FlowSolver {
 
     this.layout = layoutAtlas({ x: 8, y: 8, z: 8 });
     this.buildMaterials();
+    this.assign('uConfinement', this.confinement);
   }
 
   private buildMaterials(): void {
@@ -148,6 +189,9 @@ export class FlowSolver {
           uVelocity: { value: null },
           uPressure: { value: null },
           uDivergence: { value: null },
+          uVorticity: { value: null },
+          uConfinement: { value: 0 },
+          uVorticityFloor: { value: VORTICITY_FLOOR },
           uDt: { value: DT_CELLS },
           uDissipation: { value: DISSIPATION },
           uSdf: { value: null },
@@ -176,6 +220,8 @@ export class FlowSolver {
     this.project = make(PROJECT_SHADER);
     this.seed = make(SEED_SHADER);
     this.clear = make(CLEAR_SHADER);
+    this.vorticityMaterial = make(VORTICITY_SHADER);
+    this.confine = make(CONFINE_SHADER);
   }
 
   private setUniform(name: string, apply: (value: never) => void): void {
@@ -282,6 +328,7 @@ export class FlowSolver {
     this.velocity = [makeTarget(width, height), makeTarget(width, height)];
     this.pressure = [makeTarget(width, height), makeTarget(width, height)];
     this.divergence = makeTarget(width, height);
+    this.vorticity = makeTarget(width, height);
   }
 
   /** Upload a distance field as the obstacle, or clear it. */
@@ -354,6 +401,7 @@ export class FlowSolver {
     this.run(this.clear, this.pressure[0]);
     this.run(this.clear, this.pressure[1]);
     this.run(this.clear, this.divergence);
+    if (this.vorticity) this.run(this.clear, this.vorticity);
   }
 
   /** Advance the flow by one step. */
@@ -368,6 +416,19 @@ export class FlowSolver {
     this.constrain.uniforms.uVelocity.value = this.velocity[0].texture;
     this.run(this.constrain, this.velocity[1]);
     this.swapVelocity();
+
+    // Put back the rotation the advection just smeared away, before the projection runs.
+    // The confinement force is not divergence free, which is precisely why it belongs
+    // here: the pressure solve that follows cleans up after it.
+    if (this.vorticity && this.confinement > 0) {
+      this.vorticityMaterial.uniforms.uVelocity.value = this.velocity[0].texture;
+      this.run(this.vorticityMaterial, this.vorticity);
+
+      this.confine.uniforms.uVelocity.value = this.velocity[0].texture;
+      this.confine.uniforms.uVorticity.value = this.vorticity.texture;
+      this.run(this.confine, this.velocity[1]);
+      this.swapVelocity();
+    }
 
     // Find the divergence the advection introduced, then the pressure that cancels it.
     this.divergenceMaterial.uniforms.uVelocity.value = this.velocity[0].texture;
@@ -440,6 +501,57 @@ export class FlowSolver {
 
   get wallSlip(): boolean {
     return (this.advect.uniforms.uWallSlip.value as number) > 0.5;
+  }
+
+  /**
+   * How hard the confinement pushes back against numerical diffusion.
+   *
+   * Zero leaves the solve exactly as it was. Too much and the wake stops being a wake and
+   * becomes a permanent tangle, because nothing is left to damp it; the force adds energy
+   * and only the dissipation takes any out.
+   */
+  setConfinement(strength: number): void {
+    this.confinement = Math.max(0, strength);
+    this.assign('uConfinement', this.confinement);
+  }
+
+  get confinementStrength(): number {
+    return this.confinement;
+  }
+
+  /**
+   * The rotation in the field, for checks that cannot be made from a picture.
+   *
+   * Computes it rather than reading whatever happens to be in the buffer: the step only
+   * fills that buffer when confinement is switched on, so reading it directly reported a
+   * field with no rotation anywhere in it whenever confinement was off - which is exactly
+   * when the baseline is wanted.
+   */
+  readVorticity(): { data: Float32Array; grid: GridSize } | null {
+    if (!this.supported || !this.vorticity || !this.velocity) return null;
+    this.vorticityMaterial.uniforms.uVelocity.value = this.velocity[0].texture;
+    this.run(this.vorticityMaterial, this.vorticity);
+
+    const { width, height } = this.layout.texture;
+    const raw = new Uint16Array(width * height * 4);
+    this.renderer.readRenderTargetPixels(this.vorticity, 0, 0, width, height, raw);
+
+    const { grid } = this.layout;
+    const data = new Float32Array(grid.x * grid.y * grid.z * 4);
+    for (let z = 0; z < grid.z; z++) {
+      const tileX = z % this.layout.tiles.x;
+      const tileY = Math.floor(z / this.layout.tiles.x);
+      for (let y = 0; y < grid.y; y++) {
+        for (let x = 0; x < grid.x; x++) {
+          const source = ((tileY * grid.y + y) * width + tileX * grid.x + x) * 4;
+          const target = (x + grid.x * (y + grid.y * z)) * 4;
+          for (let c = 0; c < 4; c++) {
+            data[target + c] = DataUtils.fromHalfFloat(raw[source + c]);
+          }
+        }
+      }
+    }
+    return { data, grid };
   }
 
   setJacobiIterations(count: number): void {
@@ -525,12 +637,18 @@ export class FlowSolver {
   }
 
   private releaseTargets(): void {
-    for (const target of [...(this.velocity ?? []), ...(this.pressure ?? []), this.divergence]) {
+    for (const target of [
+      ...(this.velocity ?? []),
+      ...(this.pressure ?? []),
+      this.divergence,
+      this.vorticity,
+    ]) {
       target?.dispose();
     }
     this.velocity = null;
     this.pressure = null;
     this.divergence = null;
+    this.vorticity = null;
   }
 
   dispose(): void {
