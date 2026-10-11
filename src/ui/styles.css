@@ -191,10 +191,11 @@ html, body {
 
 /* ---- Chrome ------------------------------------------------------------ */
 
+/* Bottom left: the right-hand column is the card and the controls under it. */
 .hint {
   position: absolute;
   bottom: 18px;
-  right: 24px;
+  left: 304px;
   font-size: 11.5px;
   color: var(--text-faint);
   pointer-events: none;
@@ -256,12 +257,27 @@ html, body {
 
 /* ---- Tunnel speed control ---------------------------------------------- */
 
+/*
+ * Under the specification card, down the right-hand edge.
+ *
+ * Centred, it sat straight over the aeroplane, and the more of the simulation you
+ * switched on the worse it got: every layer adds a control and a legend, so the panel is
+ * at its tallest exactly when there is most to look at. The right-hand column already
+ * belongs to the card, so the two stack there and the middle of the viewport — where the
+ * camera frames the aircraft — stays clear.
+ *
+ * The ceiling is the card's own lower edge, measured rather than guessed, because the
+ * card's height changes with the length of the aircraft's description. With every layer
+ * on, the two together are taller than a laptop screen, so this one scrolls.
+ */
 .controls-panel {
   bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 16px;
   width: 340px;
   padding: 14px 18px 16px;
+  max-height: calc(100vh - var(--info-bottom, 16px) - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .controls-panel[hidden] { display: none; }
@@ -356,6 +372,14 @@ html, body {
     bottom: calc(42vh + 20px);
     width: auto;
     transform: none;
+    /*
+     * Pinned top and bottom rather than capped. Here the card spans the full width and
+     * the selector is a sheet along the bottom, so the controls have a band between them
+     * and nowhere else to go; a ceiling alone would still let them grow up behind the
+     * card, which is what they did.
+     */
+    top: calc(var(--info-bottom, 12px) + 12px);
+    max-height: none;
   }
 }
 

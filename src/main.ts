@@ -31,8 +31,26 @@ const loading = document.getElementById('loading') as HTMLElement;
 const viewer = new Viewer({ canvas });
 const store = new Store<AppState>({ ...DEFAULT_STATE });
 
+const infoCard = document.getElementById('info') as HTMLElement;
+
+/**
+ * Tell the stylesheet where the specification card ends.
+ *
+ * The controls sit underneath it in the same column, and the card's height depends on how
+ * long this aircraft's description runs, so the ceiling cannot be a constant in the CSS.
+ * Watched rather than set once, because the card is re-filled whenever the selection
+ * changes and re-flows whenever the window does.
+ */
+const trackInfoHeight = () => {
+  const bottom = infoCard.hidden ? 0 : infoCard.getBoundingClientRect().bottom;
+  document.documentElement.style.setProperty('--info-bottom', `${Math.round(bottom)}px`);
+};
+new ResizeObserver(trackInfoHeight).observe(infoCard);
+window.addEventListener('resize', trackInfoHeight);
+trackInfoHeight();
+
 const infoPanel = new InfoPanel({
-  panel: document.getElementById('info') as HTMLElement,
+  panel: infoCard,
   year: document.getElementById('info-year') as HTMLElement,
   name: document.getElementById('info-name') as HTMLElement,
   maker: document.getElementById('info-maker') as HTMLElement,
@@ -392,6 +410,7 @@ async function load(spec: AircraftSpec): Promise<void> {
   viewer.frameBounds(framing, true);
 
   infoPanel.show(spec);
+  trackInfoHeight();
   controls.setAircraft(spec);
 
   // Hand the aircraft to the solver: size the grid to the working section, then build
