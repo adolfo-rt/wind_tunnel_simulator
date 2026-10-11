@@ -50,6 +50,24 @@ export interface LatticeStrip {
   cl: number;
   /** Circulation shed by the whole strip. */
   gamma: number;
+  /**
+   * The two ends of the strip's bound vortex, in full three dimensions, named for the
+   * sign of the filament that trails from each.
+   *
+   * The wake leaves from here: the difference in circulation between neighbouring strips
+   * is shed at the edge they share, and a tip vortex has to be put where the tip actually
+   * is - which for a canted winglet is nothing like its spanwise station alone.
+   *
+   * Named by sign rather than by inboard and outboard deliberately. The bound vortex has
+   * to run the same way round on both wings or the two halves cancel, so the lattice
+   * swaps the ends on the mirrored side; `trailPlus` is therefore the *inboard* end on one
+   * wing and the *outboard* end on the other. Calling these inner and outer cost a real
+   * bug: the wake walk below trusted the names, and every filament on the left wing came
+   * out one edge too far inboard, with the tip vortex a strip short of the tip and a
+   * spurious one on the centreline.
+   */
+  trailPlus: Vec3;
+  trailMinus: Vec3;
 }
 
 export interface LatticeResult {
@@ -225,8 +243,10 @@ function summarise(
   const stripWidth = new Float64Array(stripCount);
   const stripChord = new Float64Array(stripCount);
   // Where the wake leaves, and which way the strip faces, both in the cross-flow plane.
+  const innerX = new Float64Array(stripCount);
   const innerY = new Float64Array(stripCount);
   const innerZ = new Float64Array(stripCount);
+  const outerX = new Float64Array(stripCount);
   const outerY = new Float64Array(stripCount);
   const outerZ = new Float64Array(stripCount);
   const normalY = new Float64Array(stripCount);
@@ -239,8 +259,10 @@ function summarise(
     // where the wake actually leaves.
     stripWidth[panel.strip] = panel.width;
     stripChord[panel.strip] = panel.chord;
+    innerX[panel.strip] = panel.a.x;
     innerY[panel.strip] = panel.a.y;
     innerZ[panel.strip] = panel.a.z;
+    outerX[panel.strip] = panel.b.x;
     outerY[panel.strip] = panel.b.y;
     outerZ[panel.strip] = panel.b.z;
     normalY[panel.strip] = panel.normal.y;
@@ -307,6 +329,8 @@ function summarise(
       chord,
       cl: chord > 1e-9 ? (2 * stripGamma[s]) / (speed * chord) : 0,
       gamma: stripGamma[s],
+      trailPlus: { x: innerX[s], y: innerY[s], z: innerZ[s] },
+      trailMinus: { x: outerX[s], y: outerY[s], z: outerZ[s] },
     });
   }
 

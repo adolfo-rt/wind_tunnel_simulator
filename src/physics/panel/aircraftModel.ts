@@ -7,7 +7,8 @@ import {
   type SectionSolution,
 } from './airfoilPanels';
 import { solveBodyOfRevolution, type BodySolution, type BodyStation } from './bodyOfRevolution';
-import { solveLattice, type LatticePanel, type LatticeResult } from './vlm';
+import { solveLattice, type LatticePanel, type LatticeResult, type LatticeStrip, type Vec3 } from './vlm';
+import type { WakeFilament } from './wakeField';
 
 /**
  * The whole aircraft, as a panel model.
@@ -48,6 +49,8 @@ export interface SurfaceSolution {
   sections: SectionCurve[];
 }
 
+export type { WakeFilament };
+
 export interface PanelAircraft {
   /** Lift coefficient on the wing's own reference area. */
   CL: number;
@@ -57,6 +60,8 @@ export interface PanelAircraft {
   referenceArea: number;
   surfaces: SurfaceSolution[];
   bodies: { name: string; solution: BodySolution }[];
+  /** The trailing vortex system, strongest at the tips. */
+  wake: WakeFilament[];
   /** Chordwise stations the section curves are sampled at, 0 at the leading edge. */
   chordStations: Float64Array;
 }
@@ -367,6 +372,80 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
     solution: solveBodyOfRevolution(body.stations),
   }));
 
+  /*
+   * The wake, read off the span loading.
+   *
+   * Each strip sheds the difference between its own circulation and its neighbour's.
+   * Across the middle of a wing that difference is small and the shedding is a gentle
+   * sheet; at the tip the circulation falls to nothing over one strip, so the whole of
+   * it is shed at once. That concentration is the tip vortex.
+   */
+  const midpoint = (p: Vec3, q: Vec3): Vec3 => ({
+    x: 0.5 * (p.x + q.x),
+    y: 0.5 * (p.y + q.y),
+    z: 0.5 * (p.z + q.z),
+  });
+
+  const wake: WakeFilament[] = [];
+  for (let s = 0; s < built.length; s++) {
+    const entry = built[s];
+    const perSide = entry.lattice.stripsPerSide;
+    if (perSide < 1) continue;
+    const base = Math.round(offsets[s] / chordwise);
+
+    /*
+     * Walk the span as one continuous run, tip through root to tip.
+     *
+     * Taken half at a time, each wing looks as though its circulation drops to zero at
+     * the centreline, so each sheds its whole root circulation there: two strong
+     * filaments on the fuselage axis, stronger than anything at the tips, and a vortex
+     * pair where an aeroplane has none. The wing does not stop at the centreline - the
+     * two halves are one surface carrying the same circulation, so nothing is shed where
+     * they meet.
+     */
+    const ordered: Array<{ gamma: number; left: Vec3; right: Vec3 }> = [];
+    const push = (strip: LatticeStrip | undefined) => {
+      if (strip) ordered.push({ gamma: strip.gamma, left: strip.trailPlus, right: strip.trailMinus });
+    };
+    /*
+     * Only the direction of travel differs between the halves, never the naming of the
+     * ends. The lattice already swapped the bound vortex's ends on the mirrored side so
+     * that both wings carry circulation the same way round, which means `trailPlus` is
+     * the outboard end there and the inboard end on the other wing - so walking the
+     * mirrored half backwards lands on the same `trailPlus`-first order.
+     */
+    if (entry.surface.mirrored) {
+      for (let i = perSide - 1; i >= 0; i--) push(result.strips[base + perSide + i]);
+    }
+    for (let i = 0; i < perSide; i++) push(result.strips[base + i]);
+    if (ordered.length === 0) continue;
+
+    for (let edge = 0; edge <= ordered.length; edge++) {
+      const outboard = edge < ordered.length ? ordered[edge].gamma : 0;
+      const inboard = edge > 0 ? ordered[edge - 1].gamma : 0;
+      const shed = outboard - inboard;
+      if (Math.abs(shed) < 1e-9) continue;
+
+      /*
+       * Where the two panels meet, which is not quite one point.
+       *
+       * Each strip's bound vortex is laid on its own quarter chord at its own average
+       * twist, so neighbouring strips put the corner they share in two slightly
+       * different places - millimetres on a twisted wing, and the ordinary consequence
+       * of a lattice being made of flat panels. Taking either one biases the wake
+       * towards one neighbour, and because the two wings are walked in opposite
+       * directions the bias lands on opposite neighbours on opposite sides: the shed
+       * sheet came out a centimetre higher on the right wing than the left, on an
+       * aeroplane that is symmetric. The midpoint is the only choice that is not a
+       * choice.
+       */
+      const before = edge > 0 ? ordered[edge - 1].right : null;
+      const after = edge < ordered.length ? ordered[edge].left : null;
+      const at = before && after ? midpoint(before, after) : (after ?? before)!;
+      wake.push({ x: at.x, y: at.y, z: at.z, gamma: shed });
+    }
+  }
+
   return {
     CL: result.CL,
     CDi: result.CDi,
@@ -375,6 +454,7 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
     referenceArea,
     surfaces,
     bodies,
+    wake,
     chordStations: stations,
   };
 }
