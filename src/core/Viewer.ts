@@ -117,17 +117,6 @@ export class Viewer {
     this.scene.add(new HemisphereLight(0xbcd4ff, 0x20252e, 0.85));
   }
 
-  /** Told whenever the drawing surface changes size, in device-independent pixels. */
-  private onResize: Array<(width: number, height: number) => void> = [];
-
-  onResized(listener: (width: number, height: number) => void): void {
-    this.onResize.push(listener);
-    const canvas = this.renderer.domElement;
-    const width = canvas.clientWidth || window.innerWidth;
-    const height = canvas.clientHeight || window.innerHeight;
-    if (width > 0 && height > 0) listener(width, height);
-  }
-
   resize(): void {
     const canvas = this.renderer.domElement;
     const width = canvas.clientWidth || window.innerWidth;
@@ -136,9 +125,6 @@ export class Viewer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
-    // Anything expanding lines in screen space needs the pixel count, or its width is
-    // right at one window size and wrong at every other.
-    for (const listener of this.onResize) listener(width, height);
   }
 
   /**

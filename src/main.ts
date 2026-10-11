@@ -8,7 +8,6 @@ import { WindTunnel } from './tunnel/Tunnel';
 import { kmhToMs } from './core/atmosphere';
 import { FlowSolver } from './physics/FlowSolver';
 import { SliceView, type SliceAxis, type SliceField } from './physics/SliceView';
-import { StreamlineRake } from './physics/StreamlineRake';
 import {
   SLOW_MOTION,
   STREAMLINE_COUNTS,
@@ -83,7 +82,6 @@ store.subscribe((state) => {
   // it to decide how far a particle travels.
   slice.setFreeStream(kmhToMs(state.speedKmh));
   streamlines.setFreeStream(kmhToMs(state.speedKmh));
-  rake.setFreeStream(kmhToMs(state.speedKmh));
 });
 tunnel.setSpeed(kmhToMs(store.get().speedKmh));
 
@@ -97,9 +95,6 @@ viewer.world.add(slice.mesh);
 const streamlines = new Streamlines({ renderer: viewer.renderer });
 viewer.world.add(streamlines.group);
 
-const rake = new StreamlineRake();
-viewer.world.add(rake.group);
-viewer.onResized((width, height) => rake.setResolution(width, height));
 // The streamlines have to agree with the solver about the grid, the domain and where the
 // aircraft is, down to the metre. Borrowing the uniforms rather than copying them means
 // they cannot fall out of step later.
@@ -151,9 +146,6 @@ const slicePosition = document.getElementById('slice-position') as HTMLInputElem
 const axisButtons = [...document.querySelectorAll<HTMLButtonElement>('#slice-axes .axis')];
 const fieldButtons = [...document.querySelectorAll<HTMLButtonElement>('#slice-fields .axis')];
 const streamlinesEnabled = document.getElementById('streamlines-enabled') as HTMLInputElement;
-const rakeEnabled = document.getElementById('rake-enabled') as HTMLInputElement;
-const rakePlane = document.getElementById('rake-plane') as HTMLInputElement;
-const rakeNote = document.getElementById('rake-note') as HTMLElement;
 const streamlineNote = document.getElementById('streamline-note') as HTMLElement;
 const densityButtons = [
   ...document.querySelectorAll<HTMLButtonElement>('#streamline-density .axis'),
@@ -223,77 +215,6 @@ for (const button of axisButtons) {
   });
 }
 
-/*
- * Trace the rake through the field as it stands.
- *
- * Reading the velocity field back to the CPU stalls the pipeline, so this is deliberately
- * not a per-frame operation — and it does not need to be. A streamline's shape depends on
- * the field, the aircraft and where the plane is cut, and on nothing else: the solve is
- * non-dimensional, so moving the speed slider changes the colours and not one coordinate.
- *
- * Which leaves the field itself, and it is still settling for the first few seconds after
- * an aircraft appears. Hence the schedule below rather than a single trace.
- */
-function traceRake(): void {
-  if (!solver.supported || !rake.visible) return;
-  const read = solver.readVelocity();
-  if (!read) return;
-
-  const size = solver.domain.getSize(new Vector3());
-  rake.rebuild({
-    data: read.data,
-    grid: read.grid,
-    min: solver.domain.min,
-    size: { x: size.x, y: size.y, z: size.z },
-  });
-  describeRake();
-}
-
-/**
- * Re-trace while the solver is still settling, then stop.
- *
- * Geometrically spaced rather than a steady tick: the field changes fastest just after
- * the aircraft appears and barely at all a few seconds later, so this spends its effort
- * where the picture is still moving and then costs nothing at all.
- */
-const RAKE_SETTLING_MS = [250, 750, 1750, 3750, 7750];
-let rakeTimers: ReturnType<typeof setTimeout>[] = [];
-
-function retraceRake(): void {
-  for (const timer of rakeTimers) clearTimeout(timer);
-  rakeTimers = [];
-  if (!rake.visible) return;
-  traceRake();
-  rakeTimers = RAKE_SETTLING_MS.map((delay) => setTimeout(traceRake, delay));
-}
-
-function describeRake(): void {
-  if (!rakeEnabled.checked) {
-    rakeNote.textContent = '';
-    return;
-  }
-  const metres = rake.planeWorld;
-  const where =
-    Math.abs(metres) < 0.5
-      ? 'on the centreline'
-      : `${Math.abs(metres).toFixed(1)} m ${metres > 0 ? 'right' : 'left'} of the centreline`;
-  rakeNote.textContent =
-    `${rake.lineCount} streamlines ${where}. These are true streamlines — tangent to the ` +
-    `field as it stands — where the tracers above are pathlines. Their shape does not ` +
-    `change with the tunnel speed, only their colour.`;
-}
-
-rakeEnabled.addEventListener('change', () => {
-  rake.setVisible(rakeEnabled.checked);
-  retraceRake();
-  describeRake();
-});
-
-rakePlane.addEventListener('input', () => {
-  rake.setPlane(Number(rakePlane.value) / Number(rakePlane.max));
-  retraceRake();
-});
-
 for (const button of fieldButtons) {
   button.addEventListener('click', () => {
     for (const other of fieldButtons) other.setAttribute('aria-pressed', String(other === button));
@@ -326,7 +247,6 @@ function describeStreamlines(): void {
 
 streamlines.setVisible(streamlinesEnabled.checked);
 streamlines.setFreeStream(kmhToMs(store.get().speedKmh));
-rake.setFreeStream(kmhToMs(store.get().speedKmh));
 
 streamlinesEnabled.addEventListener('change', () => {
   streamlines.setVisible(streamlinesEnabled.checked);
@@ -358,8 +278,6 @@ if (!solver.supported) {
   slicePosition.disabled = true;
   for (const button of fieldButtons) button.disabled = true;
   streamlinesEnabled.disabled = true;
-  rakeEnabled.disabled = true;
-  rakePlane.disabled = true;
   streamlines.setVisible(false);
   for (const button of densityButtons) button.disabled = true;
   streamlineNote.textContent = '';
@@ -465,7 +383,6 @@ async function load(spec: AircraftSpec): Promise<void> {
     solver.configure(domain, maxTexture);
     slice.configure(domain, solver.atlas, solver.velocityTexture);
     streamlines.configure(domain, solver.velocityTexture, radius, maxTexture);
-    rake.configure(domain);
 
     built.group.updateMatrixWorld(true);
     // The wake before the attitude: setting the model matrix evaluates the induced field,
@@ -473,7 +390,6 @@ async function load(spec: AircraftSpec): Promise<void> {
     solver.setWake(panelModel.wake);
     solver.setModelMatrix(built.group.matrixWorld);
     describeStreamlines();
-    retraceRake();
     solver.setObstacle(null);
     obstacle = null;
     flowStatus.textContent = 'Building the obstacle field…';
@@ -527,7 +443,6 @@ declare global {
       solver: FlowSolver;
       slice: SliceView;
       streamlines: Streamlines;
-      rake: StreamlineRake;
       /** How much slower than real time the streamlines are drawn. */
       slowMotion: number;
       store: Store<AppState>;
@@ -566,7 +481,6 @@ window.windTunnel = {
   solver,
   slice,
   streamlines,
-  rake,
   slowMotion: SLOW_MOTION,
   store,
   select,

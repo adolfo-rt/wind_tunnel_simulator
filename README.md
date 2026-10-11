@@ -338,7 +338,7 @@ their circulation and their centroid both match.
 
 ### Seeing it
 
-Two instruments, because the wake is small and the tunnel is not.
+The wake is small and the tunnel is not, so it needs an instrument.
 
 A **cross-flow slice**. The flow slice can colour itself by the part of the velocity at
 right angles to the tunnel instead of by speed, which is how a real tunnel surveys a wake
@@ -359,20 +359,6 @@ worth knowing rather than discovering. The swirl is at right angles to the free 
 it adds in quadrature: eight per cent of cross-flow changes the magnitude of the velocity
 by three parts in ten thousand. The slow core of the wake shows up; the rotation in it
 does not.
-
-A **streamline rake**. A row of release points up a vertical line in one spanwise plane,
-each drawing a single continuous ribbon — the oldest picture in the subject, and still the
-clearest way to see where the air is pushed aside, where it is squeezed and sped up, and
-where it never recovers. The plane slides across the span, so you can take it through the
-fuselage, through an engine, or out at the tip.
-
-These are *streamlines*, tangent to the field at one instant, where the tracers above are
-*pathlines* showing where particles have been. In the steady part of the flow the two
-coincide; in the unsteady wake they do not, and neither is wrong. They are traced on the
-CPU, which is what makes drawing them as thick ribbons possible — a line with width has to
-be expanded into real geometry from points something can see — and they are rebuilt rather
-than animated, because the solve is non-dimensional: a streamline's shape is identical at
-every setting of the speed slider, and only its colour changes.
 
 ### One field, not two
 
@@ -439,7 +425,6 @@ npm run verify:flow                               # physics of the solved field
 npm run verify:streamlines                        # physics of the tracers
 npm run verify:pressure                           # physics of the surface pressure
 npm run verify:wake                               # physics of the trailing wake
-npm run verify:rake                               # physics of the streamline rake
 ```
 
 ## Layout
