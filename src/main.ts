@@ -405,14 +405,16 @@ async function load(spec: AircraftSpec): Promise<void> {
     solver.configure(domain, maxTexture);
     slice.configure(domain, solver.atlas, solver.velocityTexture);
     streamlines.configure(domain, solver.velocityTexture, radius, maxTexture);
-    describeStreamlines();
 
     built.group.updateMatrixWorld(true);
     // The wake before the attitude: setting the model matrix evaluates the induced field,
     // and there is no point evaluating an empty one and then doing it again.
     solver.setWake(panelModel.wake);
     solver.setModelMatrix(built.group.matrixWorld);
+    // After the streamlines are configured, because the rake reseeds them, and before the
+    // note is written, because the note says whether there is a rake.
     applyRake();
+    describeStreamlines();
     solver.setObstacle(null);
     obstacle = null;
     flowStatus.textContent = 'Building the obstacle field…';
