@@ -7,6 +7,7 @@ import {
   type PanelAircraft,
 } from '../src/physics/panel/aircraftModel';
 import { wakeVelocity, type WakeFilament } from '../src/physics/panel/wakeField';
+import type { Vec3 } from '../src/physics/panel/vlm';
 
 const STREAM = {
   x: Math.cos((CRUISE_ANGLE_DEG * Math.PI) / 180),
@@ -35,6 +36,11 @@ function spanLoadIntegral(wake: readonly WakeFilament[]): number {
     integral += running * (sorted[i + 1].z - sorted[i].z);
   }
   return integral;
+}
+
+/** The same wake without roll-up: the classical rigid sheet, for comparison. */
+function straightened(wake: readonly WakeFilament[]): WakeFilament[] {
+  return wake.map((f) => ({ ...f, roll: { x: f.x, y: f.y, z: f.z } }));
 }
 
 describe('the trailing wake', () => {
@@ -150,9 +156,11 @@ describe('the trailing wake', () => {
    * stations several chords apart, so no point is level with all of them at once.
    */
   it('induces twice as much far downstream as in the plane it leaves from', () => {
+    // Straight filaments: roll-up point at the departure point, so the converging leg
+    // has no length and only the semi-infinite one remains.
     const pair: WakeFilament[] = [
-      { x: 0, y: 0, z: -10, gamma: 1 },
-      { x: 0, y: 0, z: 10, gamma: -1 },
+      { x: 0, y: 0, z: -10, gamma: 1, roll: { x: 0, y: 0, z: -10 } },
+      { x: 0, y: 0, z: 10, gamma: -1, roll: { x: 0, y: 0, z: 10 } },
     ];
     const stream = { x: 1, y: 0, z: 0 };
     const atWing = wakeVelocity({ x: 0, y: 0, z: 0 }, pair, stream, 0.5).y;
@@ -176,7 +184,7 @@ describe('the trailing wake', () => {
    * implementation is pinned to.
    */
   it('matches the two-dimensional point vortex far downstream', () => {
-    const line: WakeFilament[] = [{ x: 0, y: 0, z: 0, gamma: 2.5 }];
+    const line: WakeFilament[] = [{ x: 0, y: 0, z: 0, gamma: 2.5, roll: { x: 0, y: 0, z: 0 } }];
     const radius = 3;
     const v = wakeVelocity({ x: 1e7, y: radius, z: 0 }, line, { x: 1, y: 0, z: 0 }, 1e-4);
     expect(Math.abs(v.z)).toBeCloseTo(2.5 / (2 * Math.PI * radius), 6);
@@ -189,7 +197,7 @@ describe('the trailing wake', () => {
    * viscosity rather than arithmetic.
    */
   it('stays finite on the filament itself', () => {
-    const line: WakeFilament[] = [{ x: 0, y: 0, z: 0, gamma: 1 }];
+    const line: WakeFilament[] = [{ x: 0, y: 0, z: 0, gamma: 1, roll: { x: 0, y: 0, z: 0 } }];
     const onIt = wakeVelocity({ x: 10, y: 0, z: 0 }, line, { x: 1, y: 0, z: 0 }, 0.5);
     expect(Number.isFinite(onIt.x + onIt.y + onIt.z)).toBe(true);
     expect(Math.hypot(onIt.x, onIt.y, onIt.z)).toBeLessThan(1e-12);
@@ -200,4 +208,104 @@ describe('the trailing wake', () => {
       Math.abs(wakeVelocity({ x: 1e7, y: core, z: 0 }, line, { x: 1, y: 0, z: 0 }, core).z);
     expect(peak(0.1) / peak(0.2)).toBeCloseTo(2, 6);
   });
+
+  /*
+   * Roll-up moves vorticity about without changing what it does at a distance.
+   *
+   * Munk's stagger theorem: the induced drag of a wake depends on the vorticity left in
+   * the far field, not on how it got there. Winding a sheet into two ropes keeps each
+   * side's total circulation and keeps its centroid, so the first two moments of the
+   * wake are untouched and only the higher ones move.
+   *
+   * Asserting that is sharper than asserting a tolerance, because the rate tells you
+   * which moment went wrong. Scale the difference by the field itself and watch it as
+   * the distance doubles: if roll-up had changed the circulation, the ratio would sit at
+   * one and the two wakes would differ for ever; if it had moved the centroid, at two.
+   * Measured, it is between two and a third and four - the difference is dying faster
+   * than either, so neither moment moved and what is left is the third and beyond.
+   *
+   * This is the check that keeps the roll-up honest. It models something real, but it is
+   * still a choice made partly so that the vortex can be seen, and a choice that changed
+   * the aerodynamics would not be worth making.
+   */
+  it('rolls up without changing the far field', () => {
+    const stream = { x: 1, y: 0, z: 0 };
+    for (const id of ['boeing747-100', 'comet1', 'a350', 'concorde']) {
+      const { wake } = modelOf(id);
+      const sheet = straightened(wake);
+      const span = Math.max(...wake.map((f) => Math.abs(f.z)));
+
+      const difference = (spans: number) => {
+        const where = { x: 1e6, y: 0, z: spans * span };
+        const rolled = wakeVelocity(where, wake, stream, 0.5);
+        const flat = wakeVelocity(where, sheet, stream, 0.5);
+        return (
+          Math.hypot(rolled.x - flat.x, rolled.y - flat.y, rolled.z - flat.z) /
+          Math.hypot(flat.x, flat.y, flat.z)
+        );
+      };
+
+      expect(difference(5), id).toBeLessThan(0.02);
+      for (const spans of [2.5, 5, 10]) {
+        expect(difference(spans) / difference(2 * spans), `${id} at ${spans} semi-spans`)
+          .toBeGreaterThan(2.3);
+      }
+    }
+  }, 60000);
+
+  /*
+   * And it concentrates what it moves, which is the whole point.
+   *
+   * Spread along the span, the trailing vorticity is weaker than the grid solver's own
+   * numerical noise in the wake, so the tip vortex is present in the field and invisible
+   * in it. Wound up, the same circulation sits in one core.
+   */
+  it('concentrates the vorticity into a core', () => {
+    const { wake } = modelOf('boeing747-100');
+    const stream = { x: 1, y: 0, z: 0 };
+    const core = 1.5;
+
+    const speedAt = (filaments: readonly WakeFilament[], at: Vec3) => {
+      const v = wakeVelocity(at, filaments, stream, core);
+      return Math.hypot(v.x, v.y, v.z);
+    };
+
+    // A ring of points one core radius out from where one side has rolled up.
+    const centre = wake.reduce((best, f) => (f.gamma > best.gamma ? f : best)).roll;
+    let rolled = 0;
+    let flat = 0;
+    const sheet = straightened(wake);
+    for (let a = 0; a < 2 * Math.PI; a += Math.PI / 8) {
+      const at = {
+        x: centre.x,
+        y: centre.y + core * Math.sin(a),
+        z: centre.z + core * Math.cos(a),
+      };
+      rolled = Math.max(rolled, speedAt(wake, at));
+      flat = Math.max(flat, speedAt(sheet, at));
+    }
+    expect(rolled).toBeGreaterThan(3 * flat);
+  });
+
+  /*
+   * Where it rolls up to. Betz puts the vortex at the centroid of the shed vorticity on
+   * its side, which for elliptical loading is pi/4 of the semi-span - a wake narrower
+   * than the wing that made it, which is the observation the whole model rests on.
+   * Airliner loadings are not elliptical, so this holds them to the neighbourhood rather
+   * than to the number, and to being mirror images of each other exactly.
+   */
+  it('winds up inboard of the tip, symmetrically', () => {
+    for (const id of ['comet1', 'boeing747-100', 'a350', 'boeing737max']) {
+      const { wake } = modelOf(id);
+      const span = Math.max(...wake.map((f) => Math.abs(f.z)));
+      const left = wake.reduce((best, f) => (f.gamma > best.gamma ? f : best)).roll;
+      const right = wake.reduce((best, f) => (f.gamma < best.gamma ? f : best)).roll;
+
+      expect(Math.abs(left.z) / span, id).toBeGreaterThan(0.55);
+      expect(Math.abs(left.z) / span, id).toBeLessThan(0.95);
+      expect(left.z + right.z, id).toBeCloseTo(0, 8);
+      expect(left.y, id).toBeCloseTo(right.y, 8);
+      expect(left.x, id).toBeCloseTo(right.x, 8);
+    }
+  }, 60000);
 });

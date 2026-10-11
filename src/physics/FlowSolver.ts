@@ -3,10 +3,12 @@ import {
   ClampToEdgeWrapping,
   DataTexture,
   DataUtils,
+  FloatType,
   GLSL3,
   HalfFloatType,
   LinearFilter,
   Matrix4,
+  NearestFilter,
   RGBAFormat,
   ShaderMaterial,
   Vector2,
@@ -29,7 +31,10 @@ import {
   SEED_SHADER,
   VERTEX_SHADER,
   VORTICITY_SHADER,
+  WAKE_SHADER,
+  COMBINE_SHADER,
 } from './gpu/passes';
+import type { WakeFilament } from './panel/wakeField';
 import type { SdfGrid } from './sdf/buildSdf';
 
 /**
@@ -112,6 +117,35 @@ const VORTICITY_FLOOR = 0.004;
  */
 const CONFINEMENT = 0.05;
 
+/**
+ * Radius of a trailing vortex's core, in cells.
+ *
+ * A vortex filament is singular on its own axis, so something has to set the radius at
+ * which it stops accelerating and turns over into solid-body rotation. In a real tip
+ * vortex that is viscosity, and the core is a few centimetres across. Here it is the
+ * grid: a vortex narrower than a cell cannot be represented on one, and an unregularised
+ * filament passing through a cell centre would throw the tracers across the tunnel.
+ *
+ * Once the wake rolls up, this is the only thing left setting how strong the vortex
+ * looks, and the arithmetic is worth writing down because it is the ceiling on this
+ * whole stage. A rolled-up vortex carries the root circulation, so its fastest air is
+ * Gamma / (2 pi r) at the core radius. On a 737 at 64 cells that is 0.667 / (2 pi x 2.56)
+ * = 0.042 of the free stream, and the measured peak is 0.0428 - the model is doing
+ * exactly what it should and the grid is what limits it. At the default 128 cells the
+ * cell halves, so the core halves and the peak doubles to about eight percent, which is
+ * the right magnitude for an airliner at cruise.
+ *
+ * What the core does *not* touch is the circulation, and with it everything outside the
+ * core: the downwash over the span, the upwash beyond the tips, and the induced drag.
+ * The strength of the vortex is right at any resolution; only its concentration is as
+ * tight as the grid allows.
+ *
+ * Below about one cell the vortex starts to alias - the core falls between sample points
+ * and the swirl comes out as noise that changes with the grid rather than the aircraft.
+ * One and a half leaves a margin for the trilinear sampling the streamlines do.
+ */
+const WAKE_CORE_CELLS = 1.5;
+
 function makeTarget(width: number, height: number): WebGLRenderTarget {
   const target = new WebGLRenderTarget(width, height, {
     type: HalfFloatType,
@@ -143,6 +177,10 @@ export class FlowSolver {
   private pressure: [WebGLRenderTarget, WebGLRenderTarget] | null = null;
   private divergence: WebGLRenderTarget | null = null;
   private vorticity: WebGLRenderTarget | null = null;
+  /** The wake's induced velocity, which changes with the aircraft rather than the step. */
+  private wakeField: WebGLRenderTarget | null = null;
+  /** What everything outside the solver reads: the solved field plus the wake's. */
+  private field: WebGLRenderTarget | null = null;
 
   private materials: ShaderMaterial[] = [];
   private advect!: ShaderMaterial;
@@ -154,9 +192,13 @@ export class FlowSolver {
   private clear!: ShaderMaterial;
   private vorticityMaterial!: ShaderMaterial;
   private confine!: ShaderMaterial;
+  private wakeMaterial!: ShaderMaterial;
+  private combine!: ShaderMaterial;
 
   private confinement = 0;
   private sdfTexture: DataTexture | null = null;
+  private wakeTexture: DataTexture | null = null;
+  private wakeCount = 0;
   private invModel = new Matrix4();
 
   constructor(options: FlowSolverOptions) {
@@ -207,6 +249,12 @@ export class FlowSolver {
           uDomainSize: { value: new Vector3(1, 1, 1) },
           uCellWorld: { value: 1 },
           uWallSlip: { value: 0 },
+          uWake: { value: null },
+          uWakeCount: { value: 0 },
+          uWakeCore: { value: 1 },
+          uWakeStream: { value: new Vector3(1, 0, 0) },
+          uWakeField: { value: null },
+          uModel: { value: new Matrix4() },
         },
       });
       this.materials.push(material);
@@ -222,6 +270,8 @@ export class FlowSolver {
     this.clear = make(CLEAR_SHADER);
     this.vorticityMaterial = make(VORTICITY_SHADER);
     this.confine = make(CONFINE_SHADER);
+    this.wakeMaterial = make(WAKE_SHADER);
+    this.combine = make(COMBINE_SHADER);
   }
 
   private setUniform(name: string, apply: (value: never) => void): void {
@@ -249,8 +299,16 @@ export class FlowSolver {
     };
   }
 
+  /**
+   * The velocity field, for everything that is not the solver.
+   *
+   * The grid's own field and the wake's, added: see COMBINE_SHADER for why that is one
+   * field rather than two. The solver's internal passes deliberately do not read this -
+   * they iterate on the part they solve - which is why the combined target is separate
+   * from the ping-ponged pair rather than replacing them.
+   */
   get velocityTexture(): Texture | null {
-    return this.velocity ? this.velocity[0].texture : null;
+    return this.field ? this.field.texture : null;
   }
 
   get atlas(): AtlasLayout {
@@ -318,6 +376,7 @@ export class FlowSolver {
     this.setUniform('uDomainMin', (v: Vector3) => v.copy(domain.min));
     this.setUniform('uDomainSize', (v: Vector3) => v.copy(size));
     this.assign('uCellWorld', cell);
+    this.assign('uWakeCore', WAKE_CORE_CELLS * cell);
 
     this.reset();
   }
@@ -329,6 +388,8 @@ export class FlowSolver {
     this.pressure = [makeTarget(width, height), makeTarget(width, height)];
     this.divergence = makeTarget(width, height);
     this.vorticity = makeTarget(width, height);
+    this.wakeField = makeTarget(width, height);
+    this.field = makeTarget(width, height);
   }
 
   /** Upload a distance field as the obstacle, or clear it. */
@@ -384,12 +445,95 @@ export class FlowSolver {
   }
 
   /**
+   * Hand the solver the trailing wake the lattice shed, or clear it.
+   *
+   * The filaments are in the aircraft's own frame, one per texel, and they are what the
+   * grid cannot resolve: a tip vortex is centimetres across where it leaves the wing and
+   * a cell here is about a metre. This is the same division of labour stage 5 settled on
+   * for the surface pressure, and for the same measured reason - the grid is asked for
+   * what a grid is good at, and the surface method for what it is good at.
+   */
+  setWake(filaments: readonly WakeFilament[] | null): void {
+    this.wakeTexture?.dispose();
+    this.wakeTexture = null;
+    this.wakeCount = filaments?.length ?? 0;
+
+    if (!filaments || filaments.length === 0) {
+      this.assign('uWakeCount', 0);
+      this.buildWakeField();
+      return;
+    }
+
+    /*
+     * Two rows: where each filament leaves the wing and its circulation, then where it
+     * has rolled up to. One texel per end of the straight leg.
+     *
+     * Full float, and fetched by index rather than filtered: these are positions in
+     * metres across a domain tens of metres wide, and half precision would quantise the
+     * span into visible steps.
+     */
+    const n = filaments.length;
+    const data = new Float32Array(n * 2 * 4);
+    for (let i = 0; i < n; i++) {
+      const f = filaments[i];
+      data[i * 4] = f.x;
+      data[i * 4 + 1] = f.y;
+      data[i * 4 + 2] = f.z;
+      data[i * 4 + 3] = f.gamma;
+      data[(n + i) * 4] = f.roll.x;
+      data[(n + i) * 4 + 1] = f.roll.y;
+      data[(n + i) * 4 + 2] = f.roll.z;
+      data[(n + i) * 4 + 3] = 0;
+    }
+
+    const texture = new DataTexture(data, n, 2, RGBAFormat, FloatType);
+    texture.minFilter = NearestFilter;
+    texture.magFilter = NearestFilter;
+    texture.wrapS = ClampToEdgeWrapping;
+    texture.wrapT = ClampToEdgeWrapping;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    this.wakeTexture = texture;
+
+    this.assign('uWake', texture);
+    this.assign('uWakeCount', filaments.length);
+    this.buildWakeField();
+  }
+
+  get wakeFilamentCount(): number {
+    return this.wakeCount;
+  }
+
+  /**
+   * Evaluate the wake's induced velocity over the whole grid.
+   *
+   * Once per aircraft, attitude or grid change rather than once per step: a few dozen
+   * filaments summed at every cell is real work, and the answer does not depend on time.
+   * The solved field underneath it does, which is why they are combined every step and
+   * this is not.
+   */
+  private buildWakeField(): void {
+    if (!this.supported || !this.wakeField) return;
+    this.run(this.wakeMaterial, this.wakeField);
+    this.publish();
+  }
+
+  /**
    * The aircraft's placement. Rotating the model does not rebuild anything: the distance
    * field lives in the aircraft's own frame and this matrix takes query points into it.
    */
   setModelMatrix(matrix: Matrix4): void {
     this.invModel.copy(matrix).invert();
     this.setUniform('uInvModel', (m: Matrix4) => m.copy(this.invModel));
+    this.setUniform('uModel', (m: Matrix4) => m.copy(matrix));
+
+    // The filaments trail along the free stream, which the aircraft sees in its own
+    // frame. Rotating the stream into that frame is what lets a pitched or yawed
+    // aircraft keep the wake it solved for without the lattice being run again.
+    this.setUniform('uWakeStream', (v: Vector3) =>
+      v.set(1, 0, 0).transformDirection(this.invModel).normalize(),
+    );
+    this.buildWakeField();
   }
 
   /** Fill the domain with undisturbed flow. */
@@ -398,6 +542,7 @@ export class FlowSolver {
     this.steps = 0;
     this.run(this.seed, this.velocity[0]);
     this.run(this.seed, this.velocity[1]);
+    this.buildWakeField();
     this.run(this.clear, this.pressure[0]);
     this.run(this.clear, this.pressure[1]);
     this.run(this.clear, this.divergence);
@@ -461,7 +606,16 @@ export class FlowSolver {
     this.run(this.constrain, this.velocity[1]);
     this.swapVelocity();
 
+    this.publish();
     this.steps++;
+  }
+
+  /** Add the wake to the solved field, which is what everything else then reads. */
+  private publish(): void {
+    if (!this.field || !this.wakeField || !this.velocity) return;
+    this.combine.uniforms.uVelocity.value = this.velocity[0].texture;
+    this.combine.uniforms.uWakeField.value = this.wakeField.texture;
+    this.run(this.combine, this.field);
   }
 
   /** The pressure field, which later stages read to colour the aircraft. */
@@ -528,8 +682,19 @@ export class FlowSolver {
    * when the baseline is wanted.
    */
   readVorticity(): { data: Float32Array; grid: GridSize } | null {
-    if (!this.supported || !this.vorticity || !this.velocity) return null;
-    this.vorticityMaterial.uniforms.uVelocity.value = this.velocity[0].texture;
+    if (!this.supported || !this.vorticity || !this.field) return null;
+
+    /*
+     * The curl of the published field, wake and all — which is deliberately not the
+     * field the confinement pass inside a step takes the curl of.
+     *
+     * Confinement sharpens whatever rotation it is shown, and the wake's rotation does
+     * not need sharpening: it is analytic, it is already as tight as the core radius
+     * allows, and feeding it back through a force that amplifies vorticity gradients
+     * would drive it up step after step. So the solver confines what the solver
+     * evolves, and this reports what everything else can see.
+     */
+    this.vorticityMaterial.uniforms.uVelocity.value = this.field.texture;
     this.run(this.vorticityMaterial, this.vorticity);
 
     const { width, height } = this.layout.texture;
@@ -582,10 +747,11 @@ export class FlowSolver {
    * than being judged by whether the picture looks plausible.
    */
   readVelocity(): { data: Float32Array; grid: GridSize } | null {
-    if (!this.supported || !this.velocity) return null;
+    if (!this.supported || !this.field) return null;
     const { width, height } = this.layout.texture;
     const raw = new Uint16Array(width * height * 4);
-    this.renderer.readRenderTargetPixels(this.velocity[0], 0, 0, width, height, raw);
+    // The published field, wake included: what is verified should be what is drawn.
+    this.renderer.readRenderTargetPixels(this.field, 0, 0, width, height, raw);
 
     const { grid } = this.layout;
     const data = new Float32Array(grid.x * grid.y * grid.z * 3);
@@ -642,6 +808,8 @@ export class FlowSolver {
       ...(this.pressure ?? []),
       this.divergence,
       this.vorticity,
+      this.wakeField,
+      this.field,
     ]) {
       target?.dispose();
     }
@@ -649,9 +817,13 @@ export class FlowSolver {
     this.pressure = null;
     this.divergence = null;
     this.vorticity = null;
+    this.wakeField = null;
+    this.field = null;
   }
 
   dispose(): void {
+    this.wakeTexture?.dispose();
+    this.wakeTexture = null;
     this.releaseTargets();
     this.sdfTexture?.dispose();
     for (const material of this.materials) material.dispose();

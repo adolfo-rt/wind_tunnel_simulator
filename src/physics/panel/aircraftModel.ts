@@ -403,6 +403,7 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
      * two halves are one surface carrying the same circulation, so nothing is shed where
      * they meet.
      */
+    const shedHere: WakeFilament[] = [];
     const ordered: Array<{ gamma: number; left: Vec3; right: Vec3 }> = [];
     const push = (strip: LatticeStrip | undefined) => {
       if (strip) ordered.push({ gamma: strip.gamma, left: strip.trailPlus, right: strip.trailMinus });
@@ -442,8 +443,11 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
       const before = edge > 0 ? ordered[edge - 1].right : null;
       const after = edge < ordered.length ? ordered[edge].left : null;
       const at = before && after ? midpoint(before, after) : (after ?? before)!;
-      wake.push({ x: at.x, y: at.y, z: at.z, gamma: shed });
+      shedHere.push({ x: at.x, y: at.y, z: at.z, gamma: shed, roll: at });
     }
+
+    rollUp(shedHere, entry.lattice.span);
+    for (const filament of shedHere) wake.push(filament);
   }
 
   return {
@@ -457,6 +461,67 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
     wake,
     chordStations: stations,
   };
+}
+
+/**
+ * How far downstream the sheet is taken to have wound itself up, as a fraction of span.
+ *
+ * Roll-up is driven by the sheet's own induced velocity, so it has no single length:
+ * the edge curls almost immediately while the middle takes much longer, and the usual
+ * statement is that a wake is substantially rolled up within one to two spans. The lower
+ * end is taken here, for a reason worth stating plainly rather than hiding: the working
+ * section is only about three spans long behind the aircraft, and at the upper end the
+ * roll-up would finish outside the tunnel and never be seen. It is a modelling choice
+ * inside the observed range, not a measurement.
+ *
+ * Munk's stagger theorem means the choice does not move any force. Induced drag depends
+ * on the vorticity in the far wake, and winding the same vorticity into the same
+ * centroid sooner or later does not change it.
+ */
+const ROLL_UP_SPANS = 0.5;
+
+/**
+ * Wind each side's shed vorticity into a single vortex.
+ *
+ * Betz: the sheet rolls up into one vortex per side, carrying that side's whole shed
+ * circulation, centred on the centroid of its shed vorticity. For an elliptically loaded
+ * wing that centroid is at pi/4 of the semi-span, which is the familiar result that a
+ * wake is narrower than the wing that made it.
+ *
+ * Grouped by the sign of the shed circulation rather than by which half of the wing it
+ * came from, which is both simpler and closer to the physics: like-signed vorticity
+ * merges and opposite-signed does not, whatever part of the aircraft it left. It also
+ * handles the cases where sides are not left and right - a fin sheds into two vortices
+ * one above the other - without knowing anything about the surface's orientation.
+ *
+ * Mutates in place; the filaments arrive with their roll-up point set to where they were
+ * shed, which is the straight wake this replaces.
+ */
+function rollUp(filaments: WakeFilament[], span: number): void {
+  if (filaments.length === 0 || span <= 0) return;
+  const distance = ROLL_UP_SPANS * span;
+
+  for (const sign of [1, -1]) {
+    const group = filaments.filter((f) => Math.sign(f.gamma) === sign);
+    if (group.length < 2) continue;
+
+    let weight = 0;
+    const centre = { x: 0, y: 0, z: 0 };
+    for (const f of group) {
+      const w = Math.abs(f.gamma);
+      weight += w;
+      centre.x += w * f.x;
+      centre.y += w * f.y;
+      centre.z += w * f.z;
+    }
+    if (weight < 1e-12) continue;
+    centre.x /= weight;
+    centre.y /= weight;
+    centre.z /= weight;
+
+    // Downstream along the tunnel, which is the aircraft's own x at these attitudes.
+    for (const f of group) f.roll = { x: centre.x + distance, y: centre.y, z: centre.z };
+  }
 }
 
 /**

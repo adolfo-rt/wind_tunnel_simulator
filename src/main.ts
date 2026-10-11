@@ -331,6 +331,9 @@ async function load(spec: AircraftSpec): Promise<void> {
     describeStreamlines();
 
     built.group.updateMatrixWorld(true);
+    // The wake before the attitude: setting the model matrix evaluates the induced field,
+    // and there is no point evaluating an empty one and then doing it again.
+    solver.setWake(panelModel.wake);
     solver.setModelMatrix(built.group.matrixWorld);
     solver.setObstacle(null);
     obstacle = null;

@@ -44,7 +44,7 @@ The project is built in stages, each independently testable.
 | 3 | Flow field solver | Done |
 | 4 | Volumetric streamlines | Done |
 | 5 | Surface pressure visualisation | Done |
-| 6 | Turbulence and wake | Planned |
+| 6 | Turbulence and wake | Done |
 | 7 | Performance and quality tiers | Planned |
 | 8 | Fuel-efficiency analytics | Planned |
 
@@ -164,6 +164,11 @@ single velocity and pressure field that every later stage reads from, so the str
 the surface colours, the wake and the force estimates agree with one another and all react
 to the actual shape of the aircraft.
 
+Two things the grid cannot resolve are supplied by surface methods instead, and in both
+cases that was measured rather than assumed: the pressure on the skin, in stage 5, and the
+trailing vortices, in stage 6. The wake is added back into this same field, so what the
+rest of the application reads is still one field — see **The wake** below.
+
 ## The streamlines
 
 Up to sixteen thousand massless tracers, released across the whole inlet disc and carried
@@ -274,6 +279,88 @@ so the two come out elliptical at cruise, which is what modern wings do best. Le
 the model would report that airliners got *less* efficient with time. Stage 8 has to vary
 camber along the span before publishing any comparison of induced drag across the eras.
 
+## The wake
+
+A wing that lifts must trail vorticity. Circulation cannot stop in the fluid, so wherever
+the bound circulation changes along the span, the difference leaves downstream — strongest
+at the tip, where it falls to nothing over the last few feet of wing. The energy left in
+that wake *is* the induced drag. It is not a kind of friction and it is not a defect of
+manufacture: it is the price of making lift with a wing of finite span, and the tip vortex
+is what it looks like.
+
+Two things make the wake visible here, and they are solved differently because the grid
+can do one and not the other.
+
+### Holding the rotation together
+
+Semi-Lagrangian advection is unconditionally stable and badly diffusive, and the first
+thing it smears is the tightest structure in the domain. Measured on a 737, the wake loses
+a quarter of its rotation between 55% and 92% of the tunnel's length — numerical
+diffusion, not air.
+
+Vorticity confinement puts it back. It measures where vorticity is concentrating, by
+taking the gradient of its magnitude, and adds a small force that pushes rotation back up
+that gradient. It creates nothing; it resists the scheme's tendency to smear what is
+already there. The force is gated on the magnitude of the vorticity itself, and that gate
+is the whole reason it is safe: a uniform stream has no rotation at all, so however hard
+the force is driven it cannot reach the air arriving at the aircraft.
+
+The strength is 0.05, from a sweep recorded in the source. At that setting the wake holds
+its rotation and the upstream flow is numerically identical to confinement switched off.
+At fourteen times it, the force outruns the dissipation, rotation grows all the way to the
+outlet, and the domain gains a sixth of its energy from nowhere — which is what the gate
+exists to prevent and what the sweep was run to find.
+
+### The tip vortices
+
+These do not come from the grid, for the reason stage 5's surface pressure did not: a tip
+vortex is centimetres across where it leaves the wing, and a cell here is about a metre.
+So the vortex lattice, which already solved the span loading, sheds the trailing system
+from it directly. Wherever its circulation changes between one strip and the next, a
+filament leaves carrying the difference.
+
+Those filaments do not stay where they are shed. Every element of a trailing sheet sits in
+the others' induced field, the edge curls over fastest, and within a span or so the sheet
+has wound itself into one concentrated vortex per side — Betz, 1932, and the reason
+photographs of wakes show two ropes rather than a ribbon. Each rope carries its side's
+whole shed circulation and sits at the centroid of that side's shed vorticity, which for
+elliptical loading is at π/4 of the semi-span: the wake is narrower than the wing that
+made it.
+
+This is modelled rather than simulated, and it is worth being plain about why it is in
+here. Left as a flat sheet, the trailing vorticity is spread so thinly that it is weaker
+than the solver's own numerical noise in the wake — present in the field, invisible in it.
+Rolled up, the same circulation sits in one core and stands clear. Munk's stagger theorem
+says the induced drag depends on the vorticity left in the far field and not on how it got
+there, so winding it up moves no force; the test suite holds the model to that by checking
+that the rolled and unrolled wakes agree further and further out, at a rate which says
+their circulation and their centroid both match.
+
+### One field, not two
+
+The wake's induced velocity is evaluated once into the same grid the solver uses and added
+to the solved field. Everything downstream — the streamlines, the slice, the colour
+legend, the readbacks — reads that sum and does not know the two were ever separate. That
+is deliberate: this project's one firm rule is that everything is drawn from the same
+underlying field. Adding them is legitimate rather than a composite, because a vortex
+filament's field is exactly divergence-free, so the sum is still an incompressible flow
+and the pressure projection has nothing to undo.
+
+### What limits it
+
+The core radius, and nothing else. A vortex filament is singular on its own axis, so
+something has to set the radius at which it turns over into solid-body rotation; in a real
+tip vortex that is viscosity and the core is a few centimetres, while here it is the grid,
+at one and a half cells. Once the wake has rolled up, that single number sets how strong
+the vortex looks: its fastest air is Γ/2πr at the core radius, which on a 737 at 64 cells
+is 4% of the free stream against a measured 4.3%, and at the default 128 cells about 8% —
+the right magnitude for an airliner at cruise.
+
+What the core does not touch is the circulation, and so nothing outside the core: the
+downwash across the span, the upwash beyond the tips and the induced drag are right at any
+resolution. The strength of the vortex is correct; only its concentration is as tight as
+the grid allows.
+
 ## A note on the numbers
 
 Dimensions in the roster are approximate published figures from manufacturer data and
@@ -313,6 +400,7 @@ npm run views  -- boeing747-100                   # side, top and front views
 npm run verify:flow                               # physics of the solved field
 npm run verify:streamlines                        # physics of the tracers
 npm run verify:pressure                           # physics of the surface pressure
+npm run verify:wake                               # physics of the trailing wake
 ```
 
 ## Layout

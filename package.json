@@ -15,7 +15,8 @@
     "views": "node scripts/views.mjs",
     "verify:flow": "node scripts/verify-flow.mjs",
     "verify:streamlines": "node scripts/verify-streamlines.mjs",
-    "verify:pressure": "node scripts/verify-pressure.mjs"
+    "verify:pressure": "node scripts/verify-pressure.mjs",
+    "verify:wake": "node scripts/verify-wake.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"

@@ -1,3 +1,5 @@
+import { WAKE_GLSL } from '../panel/wakeField';
+
 import { ATLAS_GLSL } from './atlas';
 
 /**
@@ -363,5 +365,59 @@ export const CONFINE_SHADER = HEADER + ATLAS_GLSL + OBSTACLE_GLSL + /* glsl */ `
 
     v += uConfinement * gate * cross(towards, vorticity.xyz);
     fragColor = vec4(v, 0.0);
+  }
+`;
+
+/**
+ * The trailing wake's induced velocity, evaluated once into the grid.
+ *
+ * Biot–Savart over the filaments the lattice shed, in the aircraft's own frame — the
+ * filaments were solved there, and transforming a handful of query points is cheaper and
+ * exact where rebuilding the wake for every attitude would not be. The result is rotated
+ * back to the tunnel on the way out.
+ *
+ * Static for a given aircraft, attitude and grid, so this runs when one of those changes
+ * rather than every frame.
+ */
+export const WAKE_SHADER = HEADER + ATLAS_GLSL + OBSTACLE_GLSL + WAKE_GLSL + /* glsl */ `
+  uniform mat4 uModel;
+
+  void main() {
+    vec3 cell = fragmentCell();
+    if (isPaddingCell(cell)) { fragColor = vec4(0.0); return; }
+
+    vec3 world = cellToWorld(cell);
+    vec3 object = (uInvModel * vec4(world, 1.0)).xyz;
+    vec3 induced = mat3(uModel) * wakeVelocity(object);
+
+    // Nothing inside the aircraft, and faded over the half cell the surface is smeared
+    // across, so the skin does not acquire a through-flow the pressure solve never saw.
+    fragColor = vec4(induced * (1.0 - solidity(cell)), 0.0);
+  }
+`;
+
+/**
+ * The field everything outside the solver reads: what the grid solved, plus what the
+ * grid cannot resolve.
+ *
+ * Keeping this as a pass rather than leaving each consumer to add the two means there is
+ * still exactly one velocity field in the application. The streamlines, the slice, the
+ * speed legend and the readbacks all take the same texture they always did, and none of
+ * them knows the wake was ever separate.
+ *
+ * Adding the two is legitimate rather than a composite: a vortex filament's field is
+ * exactly divergence-free, so the sum is still incompressible and the pressure
+ * projection has nothing to undo.
+ */
+export const COMBINE_SHADER = HEADER + ATLAS_GLSL + /* glsl */ `
+  uniform sampler2D uVelocity;
+  uniform sampler2D uWakeField;
+
+  void main() {
+    vec3 cell = fragmentCell();
+    if (isPaddingCell(cell)) { fragColor = vec4(0.0); return; }
+
+    vec4 solved = readCell(uVelocity, cell);
+    fragColor = vec4(solved.xyz + readCell(uWakeField, cell).xyz, solved.w);
   }
 `;
