@@ -27,6 +27,21 @@ import type { WakeFilament } from './wakeField';
 /** Angle of attack the aircraft is shown at, in degrees. */
 export const CRUISE_ANGLE_DEG = 2.5;
 
+/**
+ * Spanwise stations the lattice is built on, whatever the aircraft's visual detail is.
+ *
+ * The mesh takes its station count from the quality setting - ten a side at low detail,
+ * twenty-two at high - and the lattice was reading the same number off the same geometry.
+ * That made the aerodynamics depend on a rendering setting: a 737 MAX came out with a
+ * cruise lift-to-drag ratio of 16.9 at high detail and 14.6 at low, and nothing about the
+ * aeroplane had changed.
+ *
+ * Fixed here instead. The number is the one the method was validated at, which is what
+ * the elliptical-planform and lifting-line checks in `tests/vlm.test.ts` were written
+ * against.
+ */
+export const AERO_STATIONS = 22;
+
 const DEG = Math.PI / 180;
 
 /** Chordwise samples kept per section, cosine spaced to resolve the suction peak. */
@@ -143,11 +158,11 @@ export interface SurfaceRequest {
  * is how a lattice knows about camber at all: the surface it models is the mean camber
  * surface, not the skin.
  */
-function latticeFor(
+export function latticeFor(
   request: SurfaceRequest,
   chordwise: number,
 ): { panels: LatticePanel[]; area: number; span: number; stripsPerSide: number } {
-  const { params } = request;
+  const params = { ...request.params, stations: AERO_STATIONS };
   const { frames, quarterChordX } = liftingSurfaceFrames(params);
   const incidence = params.incidenceDeg ?? 0;
   // One camber line per station, cached: neighbouring strips share a section, and a
@@ -356,7 +371,10 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
   const surfaces: SurfaceSolution[] = [];
   for (let s = 0; s < built.length; s++) {
     const entry = built[s];
-    const { frames } = liftingSurfaceFrames(entry.surface.params);
+    const { frames } = liftingSurfaceFrames({
+      ...entry.surface.params,
+      stations: AERO_STATIONS,
+    });
     const sections: SectionCurve[] = [];
 
     // Section lift at each frame, read back off the lattice strips for this surface.

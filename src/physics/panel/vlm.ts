@@ -83,7 +83,49 @@ export interface LatticeResult {
   spanEfficiency: number;
 }
 
+/**
+ * KNOWN LIMITATION: the induced drag below is not grid converged.
+ *
+ * Span efficiency should settle as the lattice is refined and does not. Measured at 10,
+ * 14, 18, 22, 28, 36 and 48 spanwise stations: a Comet falls steadily from 1.000 to
+ * 0.867 and is still falling; a 737 MAX oscillates 0.56, 0.85, 0.85, 0.56, 0.72, 0.84,
+ * 0.72 with no sign of settling. Cosine spanwise spacing, which is the usual answer to a
+ * loading that is singular at the tip, made it worse - at 18 stations the MAX came back
+ * with a NEGATIVE induced drag, which is impossible.
+ *
+ * The validation in `tests/vlm.test.ts` passes because it is written at one resolution,
+ * on a clean elliptical planform with no tip device. It is a real check of the method and
+ * it does not catch this.
+ *
+ * What it means downstream: induced drag is about a third of cruise drag, so a span
+ * efficiency uncertain by 0.1 moves a lift-to-drag ratio by roughly five per cent. The
+ * fuel-per-seat trend across the roster survives that comfortably; a single aircraft's
+ * figure does not, and the 737 MAX is the proof - 0.527 against its near-twin A320neo's
+ * 0.845, which is an artefact and not a difference between the aeroplanes.
+ *
+ * Suspicion, not yet confirmed: the Trefftz sum treats each strip's wake as two point
+ * vortices at its edges and evaluates the downwash at strip midpoints. That is a
+ * midpoint rule on an integrand that is singular where the strips meet, so refining the
+ * strips does not refine the estimate. A proper quadrature over the wake sheet, or
+ * Multhopp's formulation, would.
+ */
 const FOUR_PI = 4 * Math.PI;
+
+/**
+ * Filament core radius, as a fraction of the span.
+ *
+ * Of the span rather than of the panel width, which was the first attempt. The lattice
+ * takes its station count from the aircraft's visual detail level, so a core measured in
+ * panels changes size when the quality setting changes - and at low detail it grew enough
+ * to lift a 777's tip section above its root, which washout makes impossible. An
+ * aerodynamic answer must not move when a rendering setting does.
+ *
+ * Five ten-thousandths of the span is about three centimetres on a widebody: four
+ * hundredths of a panel width even at low detail, so it cannot redistribute loading, and
+ * far more than the distance a control point ever accidentally lands from another
+ * surface's trailing leg.
+ */
+const CORE_SPAN_FRACTION = 5e-4;
 
 /** How far downstream a trailing leg runs before it is treated as infinite. */
 const WAKE_LENGTH = 1e4;
@@ -116,15 +158,18 @@ function length(p: Vec3): number {
  * panel's neighbours often enough that an unguarded evaluation returns infinities and
  * the whole solve becomes NaN.
  */
-export function filamentVelocity(p: Vec3, a: Vec3, b: Vec3): Vec3 {
+export function filamentVelocity(p: Vec3, a: Vec3, b: Vec3, core = 0): Vec3 {
   const r1 = sub(p, a);
   const r2 = sub(p, b);
   const r0 = sub(b, a);
 
   const c = cross(r1, r2);
-  const cc = dot(c, c);
   const l1 = length(r1);
   const l2 = length(r2);
+  // |r1 x r2| is the segment's length times the perpendicular distance to its line, so
+  // the core enters scaled by that length - the same regularisation the trailing wake
+  // filaments use in `wakeField`, written for a segment.
+  const cc = dot(c, c) + dot(r0, r0) * core * core;
   if (cc < 1e-12 || l1 < 1e-9 || l2 < 1e-9) return { x: 0, y: 0, z: 0 };
 
   const k = (dot(r0, r1) / l1 - dot(r0, r2) / l2) / (FOUR_PI * cc);
@@ -148,7 +193,12 @@ export function filamentVelocity(p: Vec3, a: Vec3, b: Vec3): Vec3 {
  * The trailing legs are long finite filaments rather than a separate semi-infinite
  * formula: two extra evaluations, and a whole class of sign error removed.
  */
-export function horseshoeVelocity(p: Vec3, panel: LatticePanel, stream: Vec3): Vec3 {
+export function horseshoeVelocity(
+  p: Vec3,
+  panel: LatticePanel,
+  stream: Vec3,
+  core = 0,
+): Vec3 {
   const far = {
     x: (stream.x * WAKE_LENGTH) / length(stream),
     y: (stream.y * WAKE_LENGTH) / length(stream),
@@ -157,9 +207,9 @@ export function horseshoeVelocity(p: Vec3, panel: LatticePanel, stream: Vec3): V
   const aFar = { x: panel.a.x + far.x, y: panel.a.y + far.y, z: panel.a.z + far.z };
   const bFar = { x: panel.b.x + far.x, y: panel.b.y + far.y, z: panel.b.z + far.z };
 
-  const v1 = filamentVelocity(p, bFar, panel.b);
-  const v2 = filamentVelocity(p, panel.b, panel.a);
-  const v3 = filamentVelocity(p, panel.a, aFar);
+  const v1 = filamentVelocity(p, bFar, panel.b, core);
+  const v2 = filamentVelocity(p, panel.b, panel.a, core);
+  const v3 = filamentVelocity(p, panel.a, aFar, core);
   return {
     x: v1.x + v2.x + v3.x,
     y: v1.y + v2.y + v3.y,
@@ -188,9 +238,8 @@ export interface LatticeReference {
  * aircraft, a direct solve costs milliseconds and cannot fail quietly.
  *
  * Worth recording that this was changed while chasing a span efficiency of 0.0002, on the
- * theory that the iteration had diverged. It had not. The fault was a missing core radius
- * in the Trefftz sum below, and the only thing that found it was trying the direct solve
- * and watching the bad number come back unchanged.
+ * theory that the iteration had diverged. It had not: the direct solve returned the same
+ * bad number to every digit, which is how that theory died.
  */
 export function solveLattice(
   panels: LatticePanel[],
@@ -204,12 +253,31 @@ export function solveLattice(
 
   const stream = reference.stream;
 
+  /*
+   * A core radius on the filaments, sized to the lattice.
+   *
+   * Each horseshoe trails two legs ten kilometres downstream, which on a whole aircraft
+   * means every wing panel's wake runs straight through the tailplane and the fin. A
+   * control point landing near one of those lines divides by the distance to it, and
+   * nothing but luck keeps that distance sensible. An A380 was the aircraft where the
+   * luck ran out: its lift coefficient went from 0.56 at two and a half degrees to 0.92
+   * at four, and a vortex lattice is affine in angle, so that was arithmetic rather than
+   * aerodynamics. The span efficiencies it produced - 0.0002 at one setting, 0.07 at
+   * another - were the same thing further along.
+   *
+   * Sized to the span, so it is the same physical length whatever resolution the lattice
+   * is run at. Small enough to leave the validated elliptical and rectangular planforms
+   * alone and to leave the span loading where it was; large enough to survive one
+   * surface's wake passing through another's control points.
+   */
+  const core = CORE_SPAN_FRACTION * Math.abs(reference.span);
+
   // Influence of each panel's unit horseshoe on each control point, normal component.
   const a = new Float64Array(n * n);
   const rhs = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
-      const v = horseshoeVelocity(panels[i].control, panels[j], stream);
+      const v = horseshoeVelocity(panels[i].control, panels[j], stream, core);
       a[i * n + j] = dot(v, panels[i].normal);
     }
     rhs[i] = -dot(stream, panels[i].normal);
@@ -288,26 +356,29 @@ function summarise(
    * leaves the inboard edge and -Gamma at the outboard one.
    */
   /*
-   * A core radius, because the Trefftz plane has no x in it.
+   * A core radius, because the Trefftz plane has no streamwise coordinate in it.
    *
    * Two filaments at the same height and spanwise station are coincident here however
-   * many metres apart they are along the aircraft - which is correct, since the plane is
-   * infinitely far downstream, and ruinous without a core. A tailplane strip landing on
-   * top of a wing strip produced an induced velocity limited only by how nearly they
-   * coincided: an A380 at zero twist came back with an induced drag coefficient of 107
-   * and a span efficiency of 0.0002, an A340 with 0.62 where its neighbours gave 1.01.
-   * Both looked like aerodynamics and were a division by very nearly nothing.
+   * many metres apart they are along the aircraft - correct, since the plane sits
+   * infinitely far downstream, and singular without a core. The guard this replaces
+   * caught exact coincidence only, which is the one case that never happens.
    *
-   * Sized to the strips rather than picked: a quarter of the mean strip width is well
-   * inside the spacing the lattice can resolve, so it cannot blunt a real gradient, and
-   * it is far larger than the accidental near-coincidences it exists to survive. This is
-   * the same lesson as the wake filaments in stage 6, which needed a core for the same
-   * reason and got one; this sum was left singular.
+   * Deliberately tiny, and that is the whole difficulty. A core large enough to be felt
+   * blunts the wing's own spanwise gradient and flatters the answer: at a quarter of a
+   * strip width the validated elliptical planform came out at e = 1.045 and a rectangular
+   * one at 1.021, which is impossible - no planar wing beats elliptical. Induced drag is
+   * a singular integral and regularising it changes the result, so the only safe core is
+   * one small enough to leave the physics alone. At a fiftieth of a strip width the
+   * elliptical and rectangular checks both pass unchanged, and a filament landing a
+   * micrometre from another still divides by something.
+   *
+   * It is not a fix for anything. It was added while chasing an A380 that returned a span
+   * efficiency of 0.0002, and the A380 still does - see the note in `aircraftModel`.
    */
   let meanWidth = 0;
   for (let i = 0; i < stripCount; i++) meanWidth += stripWidth[i];
   meanWidth = stripCount > 0 ? meanWidth / stripCount : 0;
-  const coreSq = Math.pow(0.25 * meanWidth, 2);
+  const coreSq = Math.pow(0.02 * meanWidth, 2);
 
   let drag = 0;
   for (let i = 0; i < stripCount; i++) {
