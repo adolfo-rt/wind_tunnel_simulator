@@ -86,28 +86,41 @@ export interface LatticeResult {
 /**
  * KNOWN LIMITATION: the induced drag below is not grid converged.
  *
- * Span efficiency should settle as the lattice is refined and does not. Measured at 10,
- * 14, 18, 22, 28, 36 and 48 spanwise stations: a Comet falls steadily from 1.000 to
- * 0.867 and is still falling; a 737 MAX oscillates 0.56, 0.85, 0.85, 0.56, 0.72, 0.84,
- * 0.72 with no sign of settling. Cosine spanwise spacing, which is the usual answer to a
- * loading that is singular at the tip, made it worse - at 18 stations the MAX came back
- * with a NEGATIVE induced drag, which is impossible.
+ * Span efficiency should settle as the lattice is refined and does not. On a Comet's wing
+ * alone - no tip device, no tailplane, nothing exotic - it runs 0.995, 0.956, 0.939,
+ * 0.918, 0.874, 0.838 at 12, 18, 24, 32, 44 and 60 spanwise stations, and is still
+ * falling. Every aircraft in the roster behaves the same way.
  *
- * The validation in `tests/vlm.test.ts` passes because it is written at one resolution,
- * on a clean elliptical planform with no tip device. It is a real check of the method and
- * it does not catch this.
+ * The validation in `tests/vlm.test.ts` passes and is not wrong: on a clean elliptical
+ * planform the same code converges onto the elliptical minimum at first order, 1.0953 to
+ * 1.0019 over 10 to 320 strips. Whatever this is, it is not present there.
+ *
+ * Four things have been ruled out, each by measurement:
+ *
+ *   - The linear solve. Gauss-Seidel was replaced by a direct factorisation and returned
+ *     the same numbers to every digit.
+ *   - Singular kernels. Both the Trefftz sum and the horseshoe filaments were given core
+ *     radii. They fixed real bugs - see below and in `aircraftModel` - and changed the
+ *     numbers, but the drift with refinement is unaffected by the core size.
+ *   - Cosine spanwise spacing, the usual answer to a loading that is singular at the tip.
+ *     It made matters worse: at 18 stations a 737 MAX returned a NEGATIVE induced drag.
+ *   - Richardson extrapolation, on the hypothesis that the error is cleanly first order.
+ *     It is not: extrapolating a Comet from 12/24, 16/32, 20/40 and 26/52 gives 0.889,
+ *     0.870, 0.829 and 0.794, which is the same drift one level up.
  *
  * What it means downstream: induced drag is about a third of cruise drag, so a span
  * efficiency uncertain by 0.1 moves a lift-to-drag ratio by roughly five per cent. The
  * fuel-per-seat trend across the roster survives that comfortably; a single aircraft's
- * figure does not, and the 737 MAX is the proof - 0.527 against its near-twin A320neo's
- * 0.845, which is an artefact and not a difference between the aeroplanes.
+ * figure does not, and the 737 MAX returning 0.527 against its near-twin A320neo's 0.845
+ * is the proof - an artefact, not a difference between the aeroplanes.
  *
- * Suspicion, not yet confirmed: the Trefftz sum treats each strip's wake as two point
- * vortices at its edges and evaluates the downwash at strip midpoints. That is a
- * midpoint rule on an integrand that is singular where the strips meet, so refining the
- * strips does not refine the estimate. A proper quadrature over the wake sheet, or
- * Multhopp's formulation, would.
+ * Still the best guess, now with the easy explanations gone: the Trefftz sum treats each
+ * strip's wake as two point vortices at its edges and evaluates the downwash at strip
+ * midpoints. That is a midpoint rule on an integrand that is singular where the strips
+ * meet, and refining the strips refines the singularity along with everything else. The
+ * classical formulations - Multhopp's, or a Glauert series in the Trefftz plane - avoid
+ * it by solving for the loading in a basis that already carries the tip behaviour, rather
+ * than by sampling a loading that does not.
  */
 const FOUR_PI = 4 * Math.PI;
 

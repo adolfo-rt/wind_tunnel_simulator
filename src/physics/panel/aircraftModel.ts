@@ -158,11 +158,17 @@ export interface SurfaceRequest {
  * is how a lattice knows about camber at all: the surface it models is the mean camber
  * surface, not the skin.
  */
+/**
+ * Exported, with the station count overridable, so convergence can be studied from a
+ * test. Nothing in the application passes a count: production always uses the fixed
+ * `AERO_STATIONS`, because the answer must not move when a rendering setting does.
+ */
 export function latticeFor(
   request: SurfaceRequest,
   chordwise: number,
+  stations: number = AERO_STATIONS,
 ): { panels: LatticePanel[]; area: number; span: number; stripsPerSide: number } {
-  const params = { ...request.params, stations: AERO_STATIONS };
+  const params = { ...request.params, stations };
   const { frames, quarterChordX } = liftingSurfaceFrames(params);
   const incidence = params.incidenceDeg ?? 0;
   // One camber line per station, cached: neighbouring strips share a section, and a
