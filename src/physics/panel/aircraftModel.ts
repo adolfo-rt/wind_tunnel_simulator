@@ -1,5 +1,5 @@
 import { generateAirfoil } from '../../aircraft/airfoil';
-import { chordAt, liftingSurfaceFrames, type LiftingSurfaceParams } from '../../aircraft/build/wing';
+import { camberAt, chordAt, liftingSurfaceFrames, type LiftingSurfaceParams } from '../../aircraft/build/wing';
 import {
   angleForLift,
   sectionPressures,
@@ -150,7 +150,19 @@ function latticeFor(
   const { params } = request;
   const { frames, quarterChordX } = liftingSurfaceFrames(params);
   const incidence = params.incidenceDeg ?? 0;
-  const camberSlope = meanCamberSlope(params);
+  // One camber line per station, cached: neighbouring strips share a section, and a
+  // section solve is not free.
+  const slopeCache = new Map<string, (x: number) => number>();
+  const camberSlopeAt = (u: number) => {
+    const camber = camberAt(u, params);
+    const key = camber.toFixed(5);
+    let slope = slopeCache.get(key);
+    if (!slope) {
+      slope = meanCamberSlope(params, camber);
+      slopeCache.set(key, slope);
+    }
+    return slope;
+  };
 
   const panels: LatticePanel[] = [];
   let area = 0;
@@ -191,7 +203,7 @@ function latticeFor(
         const front = c / chordwise;
         const bound = front + 0.25 / chordwise;
         const control = front + 0.75 / chordwise;
-        const slope = camberSlope(front + 0.5 / chordwise);
+        const slope = camberSlopeAt(0.5 * (inner.u + outer.u))(front + 0.5 / chordwise);
         const pitch = twist - Math.atan(slope);
 
         let a = place(bound, inner, leadInner);
@@ -235,11 +247,22 @@ function latticeFor(
   return { panels, area, span, stripsPerSide };
 }
 
-/** Slope of the mean camber line at a chordwise fraction, for the panel normals. */
-function meanCamberSlope(params: LiftingSurfaceParams): (x: number) => number {
+/**
+ * Slope of the mean camber line at a chordwise fraction, for the panel normals.
+ *
+ * Built per spanwise station, because camber varies along the span and it is the only
+ * thing on the wing that can pay for washout: more camber outboard lowers the tip's
+ * zero-lift angle and hands back some of the load the twist took away. Built once per
+ * station rather than per panel - a section solve is not free, and every panel on a
+ * strip shares a section.
+ */
+function meanCamberSlope(
+  params: LiftingSurfaceParams,
+  camberFraction: number,
+): (x: number) => number {
   const contour = generateAirfoil({
     thickness: params.thicknessRoot,
-    camber: params.camber,
+    camber: camberFraction,
     family: params.family,
     resolution: 40,
   });
@@ -343,7 +366,9 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
       const frame = frames[f];
       const contour = generateAirfoil({
         thickness: frame.thickness,
-        camber: entry.surface.params.camber,
+        // This station's own camber, so the surface pressure is drawn from the same
+        // section the lattice loaded and the mesh lofted.
+        camber: frame.camber,
         family: entry.surface.params.family,
         resolution: 60,
       });

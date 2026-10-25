@@ -86,7 +86,18 @@ export interface WingSpec {
   twistDeg: number;
   thicknessRootRatio: number;
   thicknessTipRatio: number;
+  /** Maximum camber of the root section, as a fraction of chord. */
   camber: number;
+  /**
+   * Camber of the tip section. Omitted means the wing carries one section throughout.
+   *
+   * This is the only variable a wing has to pay for its washout. Twisting the tip nose
+   * down unloads it, and that unloading is what costs span efficiency; raising the camber
+   * outboard lowers the tip's zero-lift angle and hands some of the load back. Real wings
+   * choose the two together, which is why modelling the twist alone made every modern
+   * wing look worse than a 1950s one.
+   */
+  camberTip?: number;
   family: AirfoilFamily;
   /** Leading edge of the root chord, as a fraction of fuselage length from the nose. */
   rootStationFrac: number;

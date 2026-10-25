@@ -192,6 +192,7 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
     thicknessRoot: wing.thicknessRootRatio,
     thicknessTip: wing.thicknessTipRatio,
     camber: wing.camber,
+    camberTip: wing.camberTip,
     family: wing.family,
     axis: 'z',
     winglet: { type: wing.wingletType, height: wing.wingletHeight },

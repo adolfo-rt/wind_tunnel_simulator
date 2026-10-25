@@ -1,3 +1,5 @@
+import { solveDense } from './linear';
+
 /**
  * Vortex-lattice method.
  *
@@ -177,14 +179,22 @@ export interface LatticeReference {
 /**
  * Solve for the circulation that makes the camber surface a streamline.
  *
- * Gauss–Seidel rather than a factorisation: the matrix is diagonally dominant for a
- * sensible lattice, a few hundred sweeps converge to far better than the model's own
- * accuracy, and it needs no pivoting and no library.
+ * Gaussian elimination with partial pivoting, which is what the section and body methods
+ * already use. This was Gauss-Seidel, and the change is not because it was giving wrong
+ * answers - a direct solve reproduced it to every digit on the whole roster, so it had
+ * been converging. It is because it had no way of saying whether it had: the loop ran to
+ * its cap and returned whatever it had reached, with nothing to tell a caller apart from
+ * a converged answer and an abandoned one. At a few hundred panels, built once per
+ * aircraft, a direct solve costs milliseconds and cannot fail quietly.
+ *
+ * Worth recording that this was changed while chasing a span efficiency of 0.0002, on the
+ * theory that the iteration had diverged. It had not. The fault was a missing core radius
+ * in the Trefftz sum below, and the only thing that found it was trying the direct solve
+ * and watching the bad number come back unchanged.
  */
 export function solveLattice(
   panels: LatticePanel[],
   reference: LatticeReference,
-  iterations = 400,
 ): LatticeResult {
   const n = panels.length;
   const gamma = new Float64Array(n);
@@ -193,7 +203,6 @@ export function solveLattice(
   }
 
   const stream = reference.stream;
-  const speed = length(stream);
 
   // Influence of each panel's unit horseshoe on each control point, normal component.
   const a = new Float64Array(n * n);
@@ -206,19 +215,8 @@ export function solveLattice(
     rhs[i] = -dot(stream, panels[i].normal);
   }
 
-  for (let sweep = 0; sweep < iterations; sweep++) {
-    let change = 0;
-    for (let i = 0; i < n; i++) {
-      let sum = 0;
-      for (let j = 0; j < n; j++) if (j !== i) sum += a[i * n + j] * gamma[j];
-      const diagonal = a[i * n + i];
-      if (Math.abs(diagonal) < 1e-12) continue;
-      const next = (rhs[i] - sum) / diagonal;
-      change = Math.max(change, Math.abs(next - gamma[i]));
-      gamma[i] = next;
-    }
-    if (change < 1e-10 * speed) break;
-  }
+  const solved = solveDense(a, rhs, n);
+  gamma.set(solved);
 
   return summarise(panels, gamma, reference);
 }
@@ -289,6 +287,28 @@ function summarise(
    * (0, -dz, dy) * Gamma / (2*pi*r^2) at (y, z). Each strip sheds +Gamma where its wake
    * leaves the inboard edge and -Gamma at the outboard one.
    */
+  /*
+   * A core radius, because the Trefftz plane has no x in it.
+   *
+   * Two filaments at the same height and spanwise station are coincident here however
+   * many metres apart they are along the aircraft - which is correct, since the plane is
+   * infinitely far downstream, and ruinous without a core. A tailplane strip landing on
+   * top of a wing strip produced an induced velocity limited only by how nearly they
+   * coincided: an A380 at zero twist came back with an induced drag coefficient of 107
+   * and a span efficiency of 0.0002, an A340 with 0.62 where its neighbours gave 1.01.
+   * Both looked like aerodynamics and were a division by very nearly nothing.
+   *
+   * Sized to the strips rather than picked: a quarter of the mean strip width is well
+   * inside the spacing the lattice can resolve, so it cannot blunt a real gradient, and
+   * it is far larger than the accidental near-coincidences it exists to survive. This is
+   * the same lesson as the wake filaments in stage 6, which needed a core for the same
+   * reason and got one; this sum was left singular.
+   */
+  let meanWidth = 0;
+  for (let i = 0; i < stripCount; i++) meanWidth += stripWidth[i];
+  meanWidth = stripCount > 0 ? meanWidth / stripCount : 0;
+  const coreSq = Math.pow(0.25 * meanWidth, 2);
+
   let drag = 0;
   for (let i = 0; i < stripCount; i++) {
     const y = 0.5 * (innerY[i] + outerY[i]);
@@ -303,7 +323,7 @@ function summarise(
       for (const [ey, ez, strength] of edges) {
         const dy = y - ey;
         const dz = z - ez;
-        const rsq = dy * dy + dz * dz;
+        const rsq = dy * dy + dz * dz + coreSq;
         if (rsq < 1e-12) continue;
         vy += (strength * -dz) / (2 * Math.PI * rsq);
         vz += (strength * dy) / (2 * Math.PI * rsq);

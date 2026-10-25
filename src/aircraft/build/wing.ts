@@ -42,7 +42,18 @@ export interface LiftingSurfaceParams {
   incidenceDeg?: number;
   thicknessRoot: number;
   thicknessTip: number;
+  /** Camber at the root, as a fraction of chord. */
   camber: number;
+  /**
+   * Camber at the tip. Defaults to the root's, which is a wing of one section.
+   *
+   * Separate from the root's because camber is the only thing that can pay for washout.
+   * A wing twisted nose-down at the tip unloads it, and the unloading is what costs span
+   * efficiency; raising the camber outboard lowers the tip's zero-lift angle and hands
+   * some of that load back. The two are chosen together on a real wing, which is why
+   * modelling one without the other made washout look like a pure penalty.
+   */
+  camberTip?: number;
   family: AirfoilFamily;
   /** 'z' spans sideways (wing, tailplane); 'y' spans upwards (fin). */
   axis: 'z' | 'y';
@@ -63,6 +74,18 @@ export interface LiftingSurfaceParams {
 }
 
 const DEG = Math.PI / 180;
+
+/**
+ * Camber at a spanwise fraction, interpolated root to tip like thickness.
+ *
+ * Linear, because the thing it exists to pay for - washout - is linear in the span here,
+ * and a compensation of a different shape would leave a residual that is an artefact of
+ * the shapes rather than of the wing.
+ */
+export function camberAt(u: number, params: LiftingSurfaceParams): number {
+  const tip = params.camberTip ?? params.camber;
+  return params.camber + (tip - params.camber) * Math.min(1, Math.max(0, u));
+}
 
 /** Chord at a spanwise fraction, following the root-kink-tip planform break. */
 export function chordAt(u: number, params: LiftingSurfaceParams): number {
@@ -87,6 +110,8 @@ interface SectionFrame {
   chord: number;
   twistDeg: number;
   thickness: number;
+  /** Maximum camber of this station's section, as a fraction of its chord. */
+  camber: number;
   /**
    * Absolute quarter-chord sweep for this station, overriding the surface's own.
    * Undefined means inherit. This must be able to express a sweep BELOW the wing's,
@@ -203,6 +228,8 @@ function wingletFrames(
       spanPos,
       riseY,
       chord: rootChord * (1 - (1 - profile.tipChordRatio) * t),
+      // The device carries the tip's section, which is where it grows from.
+      camber: camberAt(1, params),
       // Real winglet toe-out is around a couple of degrees relative to the wing tip
       // chord. On a near-vertical surface any more reads as the device being
       // knock-kneed when seen from the front.
@@ -274,6 +301,7 @@ export function liftingSurfaceFrames(params: LiftingSurfaceParams): SurfaceFrame
       chord: chordAt(u, params) * (raked ? 1 - 0.45 * rakeT : 1),
       twistDeg: twist * u,
       thickness: params.thicknessRoot + (params.thicknessTip - params.thicknessRoot) * u,
+      camber: camberAt(u, params),
       sweepDeg: raked ? RAKED_SWEEP_DEG : undefined,
       v: u,
     });
@@ -318,7 +346,7 @@ export function buildLiftingSurface(params: LiftingSurfaceParams): BufferGeometr
   const rings: Ring[] = frames.map((frame, index) => {
     const contour = generateAirfoil({
       thickness: frame.thickness,
-      camber: params.camber,
+      camber: frame.camber,
       family: params.family,
       resolution,
       closedTrailingEdge: true,
