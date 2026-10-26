@@ -81,46 +81,53 @@ export interface LatticeResult {
   CDi: number;
   /** Span efficiency: 1 for elliptical loading, less for anything else. */
   spanEfficiency: number;
+  /**
+   * Pitching moment about the reference point, nose-up positive, on the reference area
+   * and chord. Zero when no moment reference was given.
+   */
+  Cm: number;
 }
 
-/**
- * KNOWN LIMITATION: the induced drag below is not grid converged.
+/*
+ * HOW THE INDUCED DRAG IS TAKEN, AND WHAT IT IS WORTH.
  *
- * Span efficiency should settle as the lattice is refined and does not. On a Comet's wing
- * alone - no tip device, no tailplane, nothing exotic - it runs 0.995, 0.956, 0.939,
- * 0.918, 0.874, 0.838 at 12, 18, 24, 32, 44 and 60 spanwise stations, and is still
- * falling. Every aircraft in the roster behaves the same way.
+ * The wake is a sheet of trailing vorticity and the induced drag is the kinetic energy
+ * it leaves behind, so the calculation belongs in the Trefftz plane far downstream. It
+ * is done there on constant-strength sheet panels, integrated in closed form, rather
+ * than on point vortices at the strip edges.
  *
- * The validation in `tests/vlm.test.ts` passes and is not wrong: on a clean elliptical
- * planform the same code converges onto the elliptical minimum at first order, 1.0953 to
- * 1.0019 over 10 to 320 strips. Whatever this is, it is not present there.
+ * That choice is the whole reason the answer converges. A point vortex a distance d away
+ * induces a velocity going as 1/d, so lumping a strip's shed vorticity into its edges and
+ * evaluating the downwash at the neighbouring strip divides by half a strip width -
+ * and refining the lattice shrinks that distance rather than the error. Span efficiency
+ * fell steadily under refinement and never settled: a Comet ran 0.995, 0.956, 0.939,
+ * 0.918, 0.874, 0.838 at 12 to 60 stations and was still falling, and a 737 MAX whose
+ * planform break happened to land beside a grid point reported 0.527 against its
+ * near-twin A320neo's 0.845. A sheet has no such term; on itself it induces exactly zero.
  *
- * Four things have been ruled out, each by measurement:
+ * What it is validated against, in `tests/vlm.test.ts`:
  *
- *   - The linear solve. Gauss-Seidel was replaced by a direct factorisation and returned
- *     the same numbers to every digit.
- *   - Singular kernels. Both the Trefftz sum and the horseshoe filaments were given core
- *     radii. They fixed real bugs - see below and in `aircraftModel` - and changed the
- *     numbers, but the drift with refinement is unaffected by the core size.
- *   - Cosine spanwise spacing, the usual answer to a loading that is singular at the tip.
- *     It made matters worse: at 18 stations a 737 MAX returned a NEGATIVE induced drag.
- *   - Richardson extrapolation, on the hypothesis that the error is cleanly first order.
- *     It is not: extrapolating a Comet from 12/24, 16/32, 20/40 and 26/52 gives 0.889,
- *     0.870, 0.829 and 0.794, which is the same drift one level up.
+ *   - An elliptical planform converges on the elliptical minimum from above at first
+ *     order: 1.1838, 1.0886, 1.0445, 1.0227, 1.0116 over 10 to 160 strips.
+ *   - A rectangular planform, whose loading carries a square-root singularity at the
+ *     tip that the elliptical one does not, passes below 1 as it must: 1.2126, 1.0872,
+ *     1.0255, 0.9902, 0.9672.
+ *   - Multi-surface systems reproduce Prandtl's biplane interference. Two identical
+ *     wings stacked vertically give an interference factor of 0.955 as the gap closes,
+ *     where coincident sheets must behave as a single wing, and 0.006 at two spans
+ *     apart, where they must be independent, monotonic throughout.
  *
- * What it means downstream: induced drag is about a third of cruise drag, so a span
- * efficiency uncertain by 0.1 moves a lift-to-drag ratio by roughly five per cent. The
- * fuel-per-seat trend across the roster survives that comfortably; a single aircraft's
- * figure does not, and the 737 MAX returning 0.527 against its near-twin A320neo's 0.845
- * is the proof - an artefact, not a difference between the aeroplanes.
+ * What it is NOT: converged at the station count the application runs. `AERO_STATIONS`
+ * trades accuracy for a solve that finishes inside a frame budget, and at that count
+ * the first-order error is still worth a few hundredths of span efficiency - enough that
+ * several aircraft report slightly more than 1.0, which a planar wing cannot achieve.
+ * Values above 1 here are discretisation, not a wing beating the elliptical minimum.
  *
- * Still the best guess, now with the easy explanations gone: the Trefftz sum treats each
- * strip's wake as two point vortices at its edges and evaluates the downwash at strip
- * midpoints. That is a midpoint rule on an integrand that is singular where the strips
- * meet, and refining the strips refines the singularity along with everything else. The
- * classical formulations - Multhopp's, or a Glauert series in the Trefftz plane - avoid
- * it by solving for the loading in a basis that already carries the tip behaviour, rather
- * than by sampling a loading that does not.
+ * One real limitation remains, and it is in the geometry rather than in this file: the
+ * wake is rigid. It trails straight downstream from where it is shed instead of rolling
+ * up and convecting down, so a tailplane sits wherever the airframe puts it relative to
+ * an undeflected wing sheet. In the cross-flow plane that can be a few centimetres, and
+ * the mutual interference between two sheets that close is both large and sensitive.
  */
 const FOUR_PI = 4 * Math.PI;
 
@@ -245,6 +252,13 @@ export interface LatticeReference {
    * be joined up. Omitted means one surface, which is what every test fixture is.
    */
   groups?: LatticeGroup[];
+  /**
+   * Where moments are taken about, and the chord they are made dimensionless on.
+   *
+   * Omitted means the pitching moment is not wanted and is reported as zero, which is
+   * what the fixtures that only ask about lift and drag do.
+   */
+  moment?: { x: number; chord: number };
 }
 
 export interface LatticeGroup {
@@ -348,7 +362,7 @@ export function solveLattice(
   const n = panels.length;
   const gamma = new Float64Array(n);
   if (n === 0) {
-    return { gamma, strips: [], CL: 0, CDi: 0, spanEfficiency: 0 };
+    return { gamma, strips: [], CL: 0, CDi: 0, spanEfficiency: 0, Cm: 0 };
   }
 
   const stream = reference.stream;
@@ -441,6 +455,35 @@ function summarise(
   let lift = 0;
   for (let s = 0; s < stripCount; s++) lift += stripGamma[s] * stripWidth[s] * normalY[s];
   const CL = (2 * lift) / (speed * reference.area);
+
+  /*
+   * Pitching moment about the reference point, nose-up positive.
+   *
+   * Taken per panel rather than per strip, because the whole point of it is WHERE along
+   * the chord the load sits: a strip's total circulation says nothing about that, and
+   * the difference between a load at the quarter chord and the same load at the three
+   * quarter chord is the entire pitching moment.
+   *
+   * Only the lifting component is carried. The streamwise force has a moment arm too,
+   * but it is the induced drag acting over the height of the surface above the centre of
+   * gravity - two small numbers multiplied together, against a lift acting over tens of
+   * metres of tail arm. Leaving it out keeps this consistent with how `CL` above is
+   * taken, which is the thing the trim solution balances it against.
+   */
+  let moment = 0;
+  const momentRef = reference.moment;
+  if (momentRef) {
+    for (let i = 0; i < panels.length; i++) {
+      const panel = panels[i];
+      const panelLift = gamma[i] * panel.width * panel.normal.y;
+      // x runs aft, so a load ahead of the reference point pitches the nose up.
+      moment += panelLift * (momentRef.x - 0.5 * (panel.a.x + panel.b.x));
+    }
+  }
+  const Cm =
+    momentRef && momentRef.chord > 1e-9
+      ? (2 * moment) / (speed * reference.area * momentRef.chord)
+      : 0;
 
   /*
    * Induced drag from the Trefftz plane, treated properly as two-dimensional.
@@ -610,5 +653,5 @@ function summarise(
     });
   }
 
-  return { gamma, strips, CL, CDi, spanEfficiency };
+  return { gamma, strips, CL, CDi, spanEfficiency, Cm };
 }

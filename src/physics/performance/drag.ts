@@ -169,3 +169,46 @@ export function inducedDrag(
   if (span <= 0 || spanEfficiency <= 0 || dynamicPressure <= 0) return 0;
   return (lift * lift) / (dynamicPressure * Math.PI * span * span * spanEfficiency);
 }
+
+/**
+ * Interference factors, Q in the component build-up.
+ *
+ * A component's drag is not what it would have in isolation. Where two surfaces meet,
+ * their boundary layers merge into a thicker one that separates more readily, and the
+ * corner flow between them carries its own loss. The component method handles this with
+ * a multiplier per component rather than by resolving the junction, which an inviscid
+ * panel code could not do in any case.
+ *
+ * These are Raymer's values for a jet transport. The nacelle factor is much the largest
+ * and is not a rounding: a podded engine hung under a wing on a pylon sits in the wing's
+ * own flow field, and the pylon, nacelle and wing lower surface form two junctions
+ * between them. A well-filleted wing root, by contrast, is designed until it costs
+ * nothing, which is what a factor of one means here - fillets are not free, they are
+ * simply already paid for in the shape.
+ */
+export const INTERFERENCE_FACTOR: Record<string, number> = {
+  fuselage: 1.0,
+  wing: 1.0,
+  tailplane: 1.05,
+  fin: 1.05,
+  nacelle: 1.3,
+  other: 1.3,
+};
+
+/** Interference factor for a component the table does not name. */
+export const DEFAULT_INTERFERENCE = 1.3;
+
+/**
+ * Leakage and protuberance drag, as a fraction of the parasite drag it is added to.
+ *
+ * Everything a clean-sheet wetted-area calculation cannot see: air leaking through door
+ * and window seals and out of the pressure vessel, steps and gaps where panels meet,
+ * control surface gaps, antennas, probes, drain masts, light fairings. Each one is
+ * negligible and there are thousands.
+ *
+ * Four per cent is the middle of Raymer's two to five for a transport. It is a markup
+ * rather than a calculation, and it is applied equally to every aircraft in the roster
+ * rather than varied to improve the agreement with published figures - which would be
+ * fitting the model to the answer rather than estimating the drag.
+ */
+export const LEAKAGE_AND_PROTUBERANCE = 0.04;

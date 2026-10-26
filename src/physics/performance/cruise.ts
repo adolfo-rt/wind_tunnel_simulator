@@ -2,7 +2,10 @@ import type { AircraftSpec } from '../../aircraft/AircraftSpec';
 import { meanAerodynamicChord } from '../../aircraft/AircraftSpec';
 import { atmosphereAt, dynamicViscosity } from '../../core/atmosphere';
 import {
+  DEFAULT_INTERFERENCE,
+  INTERFERENCE_FACTOR,
   KORN_FACTOR,
+  LEAKAGE_AND_PROTUBERANCE,
   bodyFormFactor,
   divergenceMach,
   nacelleFormFactor,
@@ -184,15 +187,32 @@ export function estimateCruise(inputs: CruiseInputs): CruiseEstimate {
     other: { length: 0.3 * chord, formFactor: 1.4 },
   };
 
+  /*
+   * Component build-up: skin friction over the wetted area, raised by a form factor for
+   * the component's thickness and by an interference factor for the junctions it makes
+   * with its neighbours, then a flat markup for everything too small to name.
+   *
+   * The interference and the markup were both missing until the pitch trim went in, and
+   * their absence had been hidden by a second error. An untrimmed tailplane was carrying
+   * several per cent of the aircraft's lift on a short span, and the induced drag of that
+   * spurious load stood in for the parasite drag that was never counted. Trimming the
+   * aircraft removed the compensation and left every aircraft in the roster reporting a
+   * lift-to-drag ratio above its published figure - all twenty of them, which is a
+   * missing term and not scatter.
+   */
   const parasiteParts: DragItem[] = [];
   let parasite = 0;
   for (const [name, wettedArea] of wetted.byPart) {
     const shape = shapes[name] ?? shapes.other;
+    const interference = INTERFERENCE_FACTOR[name] ?? DEFAULT_INTERFERENCE;
     const cf = skinFriction(reynoldsOn(conditions, shape.length, spec), mach);
-    const force = q * cf * shape.formFactor * wettedArea;
+    const force = q * cf * shape.formFactor * interference * wettedArea;
     parasiteParts.push({ name, force, share: 0 });
     parasite += force;
   }
+  const leakage = parasite * LEAKAGE_AND_PROTUBERANCE;
+  parasiteParts.push({ name: 'leakage', force: leakage, share: 0 });
+  parasite += leakage;
 
   // --- Wave: how far past drag divergence this wing is flying. ---
   const korn = KORN_FACTOR[wing.family] ?? KORN_FACTOR.peaky;

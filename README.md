@@ -45,8 +45,8 @@ The project is built in stages, each independently testable.
 | 4 | Volumetric streamlines | Done |
 | 5 | Surface pressure visualisation | Done |
 | 6 | Turbulence and wake | Done |
-| 7 | Performance and quality tiers | Planned |
-| 8 | Fuel-efficiency analytics | Planned |
+| 7 | Performance and quality tiers | Skipped |
+| 8 | Fuel-efficiency analytics | Physics done, interface pending |
 
 ## How the aircraft are made
 
@@ -288,8 +288,14 @@ pictures. Washout costs inviscid span efficiency, and these wings carry one camb
 from root to tip, so there is nothing to compensate it: the 787's five degrees of washout
 takes its span efficiency from 1.01 to 0.61. A real wing is twisted and cambered together
 so the two come out elliptical at cruise, which is what modern wings do best. Left alone,
-the model would report that airliners got *less* efficient with time. Stage 8 has to vary
-camber along the span before publishing any comparison of induced drag across the eras.
+the model would report that airliners got *less* efficient with time.
+
+Stage 8 followed that up and the answer turned out to be no. Spanwise camber was added to
+the builder and measured, and at plausible section cambers it buys about two to three
+degrees of zero-lift angle at the tip — which cannot pay for five degrees of washout. The
+capability is in `camberTip` and no aircraft in the roster sets it, because using it to
+cancel twist would be fitting the geometry to the answer. What actually fixed the era
+comparison was elsewhere: the Trefftz rewrite below, and trimming the aircraft in pitch.
 
 ## The wake
 
@@ -397,6 +403,115 @@ downwash across the span, the upwash beyond the tips and the induced drag are ri
 resolution. The strength of the vortex is correct; only its concentration is as tight as
 the grid allows.
 
+## Cruise performance
+
+Stage 8 asks the question the project exists for: how much fuel does each of these
+aircraft burn per seat, and what did the engineering buy. The answer is assembled from
+three different kinds of number, and the interface labels each one.
+
+**Simulated** — the induced drag. The vortex lattice is trimmed to the aircraft's cruise
+weight, the wake is integrated in the Trefftz plane, and the span efficiency that falls
+out is the model's own answer. Nothing about it is looked up.
+
+**Derived** — the parasite and wave drag, from published correlations, because an
+inviscid method cannot produce either. Skin friction is Prandtl–Schlichting over the
+wetted area that is measured off the actual triangle mesh, raised by a form factor for
+each component's thickness (Hoerner for bodies, Raymer for nacelles, Shevell for
+surfaces) and an interference factor for the junctions it makes, plus four per cent for
+leakage and protuberances. Wave drag starts at the Korn drag-divergence Mach and rises as
+Mason's fourth power.
+
+**Published** — mass, seat count, thrust-specific fuel consumption, wing area and span.
+These are book values and are never adjusted to improve agreement.
+
+### Trimming, and why it mattered
+
+The aircraft is solved for the angle of attack *and* the stabiliser incidence that
+together carry the weight with no pitching moment left over, about a centre of gravity
+assumed at 25% of the mean aerodynamic chord for every aircraft in the roster.
+
+That assumption is stated rather than researched because cruise centre of gravity is
+rarely published, and twenty-one estimates dressed as sources would be worse than one
+honest constant. It is not a detail: moving the centre of gravity aft unloads the
+tailplane and cuts trim drag, which is exactly why large aircraft pump fuel into a tail
+tank.
+
+Trimming only for lift — which is what the first version did — leaves the tailplane at
+whatever incidence the geometry gives it, and for every aircraft here that is zero to the
+body axis. The tail load then tracks angle of attack instead of balance: a Comet cruising
+at 0.65° carried 8% of its lift *downward*, a 737 MAX at 4.87° carried 7% *upward*. A
+short-span surface carrying several per cent of the lift is expensive in induced drag, and
+it was wrecking the modern, highly loaded aircraft in particular. An A350 reported a span
+efficiency of 0.733 against 0.912 for its wing alone, while a near-identical 787 wing
+reported 0.938 against 0.902 — a difference between the models, not between the
+aeroplanes. Trimmed, every aircraft carries a download — two to six per cent of its
+weight for nineteen of the twenty, and the A350 reads 0.982. The Comet is the exception
+at 12%, which is more than a transport should need and is still open; its tail is small
+and its wing root chord long, so the moment arm the model gives it is short.
+
+The removal uncovered a second error that had been hiding behind the first. With the
+spurious tail upload gone, all twenty aircraft reported a lift-to-drag ratio *above* the
+published figure — twenty out of twenty, which is a missing term and not scatter. The
+component build-up had no interference factors and no leakage allowance, and the induced
+drag of the bogus tail load had been standing in for them. Adding both, with Raymer's
+published values and no tuning, took the mean error from 12.8% to 7.4%.
+
+### How close it gets
+
+Simulated cruise lift-to-drag against published, at 22 spanwise stations:
+
+| Aircraft | Simulated | Published | Error |
+|---|---|---|---|
+| de Havilland Comet 1 | 15.8 | 13.5 | +17% |
+| Sud Aviation Caravelle III | 16.1 | 13.0 | +24% |
+| Boeing 707-120 | 17.8 | 15.5 | +15% |
+| Douglas DC-8-10 | 17.7 | 15.8 | +12% |
+| Boeing 727-200 | 16.3 | 15.0 | +9% |
+| Boeing 737-200 | 15.9 | 15.0 | +6% |
+| Boeing 747-100 | 18.2 | 17.0 | +7% |
+| Airbus A300B4 | 17.5 | 16.5 | +6% |
+| McDonnell Douglas MD-82 | 17.0 | 16.0 | +6% |
+| Boeing 767-200 | 17.8 | 17.5 | +2% |
+| Boeing 757-200 | 17.7 | 17.0 | +4% |
+| Airbus A320-200 | 18.0 | 17.0 | +6% |
+| Airbus A340-300 | 21.5 | 18.0 | +19% |
+| Boeing 777-200 | 18.7 | 19.0 | −1% |
+| Boeing 737-800 | 18.2 | 18.0 | +1% |
+| Airbus A380-800 | 20.6 | 19.0 | +8% |
+| Boeing 787-8 | 20.4 | 20.5 | −1% |
+| Airbus A350-900 | 21.2 | 21.0 | +1% |
+| Airbus A320neo | 18.2 | 18.0 | +1% |
+| Boeing 737 MAX 8 | 18.3 | 18.5 | −1% |
+
+Mean absolute error 7.4%. Concorde is not estimated: at Mach 2.02 the drag correlations
+here describe the start of the transonic rise and not supersonic flight, where wave drag
+comes from the volume distribution along the aircraft and needs a different calculation.
+
+The residual error has a shape, and the shape is informative. Aircraft from 1980 onwards
+land within a few per cent. The 1950s aircraft are over-predicted by 12 to 24%, and the
+likeliest reason is that the model gives every aircraft a modern skin. Excrescence drag —
+protruding rivet heads, unsealed panel joints, the thousand small roughnesses of a 1949
+airframe — is not modelled, and it was a far larger share of drag then than now. That is
+a real omission rather than noise, and it is **not** corrected by an era factor, because
+an era factor tuned until the chart looks right is not a measurement. The A340 at +19% is
+the outlier that era does not explain and is still open.
+
+### What the span efficiency is worth
+
+Span efficiency is converged in method but not in grid. The elliptical and rectangular
+planform checks converge cleanly at first order, and the multi-surface case reproduces
+Prandtl's biplane interference at both exact limits. But at the 22 stations the
+application runs, refinement is not clean for a real aircraft: a DC-8 reads 0.976, 1.027,
+0.992, 1.003 at 22, 30, 40 and 56 stations, and a 787 oscillates 0.924, 0.983, 0.956,
+0.954. The scatter comes from where planform breaks happen to fall relative to grid
+points, so Richardson extrapolation does not remove it.
+
+The honest figure is therefore **±0.03 on span efficiency**, which is about ±1% on
+lift-to-drag. Values slightly above 1.0 in the table are inside that band and are
+discretisation, not a wing beating the elliptical minimum. Refining is not the answer:
+going from 22 to 56 stations costs five times the solve time (1.4 to 7.1 seconds per
+aircraft) and moves the mean error by 0.8 of a percentage point.
+
 ## A note on the numbers
 
 Dimensions in the roster are approximate published figures from manufacturer data and
@@ -425,6 +540,11 @@ npm run typecheck # TypeScript
 The suite checks the airfoil generator against the published NACA 0012 ordinate table,
 validates every aircraft in the roster for physical plausibility, and builds all 21
 aircraft checking that the geometry is finite, correctly wound and watertight.
+
+The aerodynamics is held to results that were known long before anyone could compute
+them: an elliptical planform reaching the minimum induced drag, a lift slope approaching
+2π, Prandtl's biplane interference at both of its exact limits, and a trimmed aircraft
+carrying a tail download rather than an upload.
 
 There are also scripts that drive the built app in headless Chromium, for checking a stage
 without a person in the loop:

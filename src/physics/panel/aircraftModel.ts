@@ -42,6 +42,24 @@ export const CRUISE_ANGLE_DEG = 2.5;
  */
 export const AERO_STATIONS = 22;
 
+/**
+ * Where the centre of gravity is assumed to sit, as a fraction of the mean aerodynamic
+ * chord aft of its leading edge.
+ *
+ * A quarter is the conceptual-design value and it is applied to every aircraft in the
+ * roster rather than researched one by one. Cruise centre of gravity is rarely
+ * published, so per-aircraft figures would be estimates wearing the clothes of sources,
+ * and the comparison this project exists to make is between aircraft - which is better
+ * served by one stated constant than by twenty-one guesses.
+ *
+ * It matters because it sets the tail load. Moving it aft unloads the tailplane and cuts
+ * trim drag, which is why large aircraft pump fuel into a tail tank to shift it there.
+ */
+export const CG_FRACTION_OF_MAC = 0.25;
+
+/** The surface the pitch trim acts on. A delta has none and is trimmed by its elevons. */
+export const STABILISER = 'tailplane';
+
 const DEG = Math.PI / 180;
 
 /** Chordwise samples kept per section, cosine spaced to resolve the suction peak. */
@@ -62,6 +80,14 @@ export interface SectionCurve {
 export interface SurfaceSolution {
   name: string;
   sections: SectionCurve[];
+  /**
+   * Lift this surface carries, in the lattice's own units, download negative.
+   *
+   * Weighted exactly as the whole-aircraft lift is - circulation times width times the
+   * upward part of the panel normal - so the surface shares sum to the total, and a fin
+   * contributes nothing at zero sideslip.
+   */
+  lift: number;
 }
 
 export type { WakeFilament };
@@ -73,6 +99,12 @@ export interface PanelAircraft {
   spanEfficiency: number;
   aspectRatio: number;
   referenceArea: number;
+  /** Pitching moment about the assumed centre of gravity, nose-up positive. */
+  Cm: number;
+  /** Mean aerodynamic chord of the reference surface. */
+  mac: number;
+  /** Where the centre of gravity was taken, along the fuselage. */
+  centreOfGravityX: number;
   surfaces: SurfaceSolution[];
   bodies: { name: string; solution: BodySolution }[];
   /** The trailing vortex system, strongest at the tips. */
@@ -167,7 +199,16 @@ export function latticeFor(
   request: SurfaceRequest,
   chordwise: number,
   stations: number = AERO_STATIONS,
-): { panels: LatticePanel[]; area: number; span: number; stripsPerSide: number } {
+): {
+  panels: LatticePanel[];
+  area: number;
+  span: number;
+  stripsPerSide: number;
+  /** Mean aerodynamic chord, the length pitching moments are made dimensionless on. */
+  mac: number;
+  /** Where the mean aerodynamic chord's leading edge sits along the fuselage. */
+  macLeadingEdgeX: number;
+} {
   const params = { ...request.params, stations };
   const { frames, quarterChordX } = liftingSurfaceFrames(params);
   const incidence = params.incidenceDeg ?? 0;
@@ -188,6 +229,11 @@ export function latticeFor(
   const panels: LatticePanel[] = [];
   let area = 0;
   let strip = 0;
+  // Running sums for the mean aerodynamic chord: the chord-weighted average chord, and
+  // the chord-weighted average leading edge that locates it.
+  let macNumerator = 0;
+  let macDenominator = 0;
+  let leadNumerator = 0;
 
   const sides = request.mirrored ? [1, -1] : [1];
   for (const side of sides) {
@@ -258,6 +304,12 @@ export function latticeFor(
       // almost nothing to it - which is why a winglet raises aspect ratio so little and
       // span efficiency so much.
       area += chord * Math.abs(dSpan);
+      if (side > 0) {
+        const weight = chord * Math.abs(dSpan);
+        macNumerator += chord * weight;
+        macDenominator += weight;
+        leadNumerator += 0.5 * (leadInner + leadOuter) * weight;
+      }
       strip++;
     }
   }
@@ -265,7 +317,9 @@ export function latticeFor(
   const stripsPerSide = request.mirrored ? strip / 2 : strip;
   const tip = frames[frames.length - 1];
   const span = (request.mirrored ? 2 : 1) * tip.spanPos;
-  return { panels, area, span, stripsPerSide };
+  const mac = macDenominator > 1e-9 ? macNumerator / macDenominator : 0;
+  const macLeadingEdgeX = macDenominator > 1e-9 ? leadNumerator / macDenominator : 0;
+  return { panels, area, span, stripsPerSide, mac, macLeadingEdgeX };
 }
 
 /**
@@ -322,6 +376,24 @@ export interface AircraftModelRequest {
   angleDeg?: number;
   /** Chordwise lattice panels per strip. */
   chordwise?: number;
+  /**
+   * Stabiliser incidence in degrees, positive leading edge up, applied to the tailplane.
+   *
+   * This is the pitch trim control. Left undefined the tailplane sits at whatever
+   * incidence its geometry gives it, which for every aircraft in the roster is zero to
+   * the body axis - and an untrimmed tailplane at zero incidence carries a load that is
+   * almost pure angle of attack. Measured across the roster it ran from 8% of the
+   * aircraft's lift downward on a Comet at 0.65 degrees to 7% upward on a 737 MAX at
+   * 4.87, when a trimmed airliner carries a percent or three of download at any attitude.
+   */
+  stabiliserIncidenceDeg?: number;
+  /**
+   * Spanwise stations per surface, overriding `AERO_STATIONS`.
+   *
+   * For convergence studies only. The application never sets it, because the answer must
+   * not move when a rendering setting does.
+   */
+  stations?: number;
 }
 
 /**
@@ -337,10 +409,21 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
   const stations = chordStations();
   const stream = { x: Math.cos(angle), y: Math.sin(angle), z: 0 };
 
-  const built = request.surfaces.map((surface) => ({
-    surface,
-    lattice: latticeFor(surface, chordwise),
-  }));
+  /*
+   * The stabiliser setting is applied here rather than in the geometry, so that trimming
+   * the aircraft does not rebuild the mesh the viewer is looking at. Incidence tilts the
+   * lattice panels, which is all a vortex lattice needs to know about a stabiliser that
+   * has been wound a couple of degrees nose down.
+   */
+  const stabiliser = request.stabiliserIncidenceDeg;
+  const stationCount = request.stations ?? AERO_STATIONS;
+  const built = request.surfaces.map((surface) => {
+    const adjusted =
+      stabiliser !== undefined && surface.name === STABILISER
+        ? { ...surface, params: { ...surface.params, incidenceDeg: stabiliser } }
+        : surface;
+    return { surface: adjusted, lattice: latticeFor(adjusted, chordwise, stationCount) };
+  });
 
   const reference = built[0];
   const referenceArea = Math.max(reference?.lattice.area ?? 1, 1e-6);
@@ -356,7 +439,13 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
     panels.push(...entry.lattice.panels);
   }
 
-  let result: LatticeResult = { gamma: new Float64Array(0), strips: [], CL: 0, CDi: 0, spanEfficiency: 0 };
+  // Moments are taken about the assumed centre of gravity, on the wing's mean chord.
+  const mac = reference?.lattice.mac ?? 0;
+  const centreOfGravityX = (reference?.lattice.macLeadingEdgeX ?? 0) + CG_FRACTION_OF_MAC * mac;
+
+  let result: LatticeResult = {
+    gamma: new Float64Array(0), strips: [], CL: 0, CDi: 0, spanEfficiency: 0, Cm: 0,
+  };
   if (panels.length > 0) {
     // Strip indices have to be unique across surfaces or two wings would share one.
     let nextStrip = 0;
@@ -386,6 +475,7 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
       span: referenceSpan,
       stream,
       groups,
+      moment: { x: centreOfGravityX, chord: mac },
     });
   }
 
@@ -394,7 +484,7 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
     const entry = built[s];
     const { frames } = liftingSurfaceFrames({
       ...entry.surface.params,
-      stations: AERO_STATIONS,
+      stations: stationCount,
     });
     const sections: SectionCurve[] = [];
 
@@ -428,7 +518,13 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
       sections.push({ u: frame.u, v: frame.v, cl, upper, lower });
     }
 
-    surfaces.push({ name: entry.surface.name, sections });
+    const from = offsets[s];
+    const to = s + 1 < offsets.length ? offsets[s + 1] : panels.length;
+    let lift = 0;
+    for (let i = from; i < to; i++) {
+      lift += result.gamma[i] * panels[i].width * panels[i].normal.y;
+    }
+    surfaces.push({ name: entry.surface.name, sections, lift });
   }
 
   const bodies = request.bodies.map((body) => ({
@@ -520,6 +616,9 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
     spanEfficiency: result.spanEfficiency,
     aspectRatio: (referenceSpan * referenceSpan) / referenceArea,
     referenceArea,
+    Cm: result.Cm,
+    mac,
+    centreOfGravityX,
     surfaces,
     bodies,
     wake,

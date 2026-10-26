@@ -70,6 +70,26 @@ function streamAt(angleDeg: number) {
   return { x: Math.cos(angleDeg * DEG), y: Math.sin(angleDeg * DEG), z: 0 };
 }
 
+/**
+ * The same flat elliptical wing, raised to a height and with its strips numbered from a
+ * base, so that two of them can be stacked into a biplane.
+ */
+function stacked(semiSpan: number, rootChord: number, spanwise: number, height: number, base: number) {
+  const { panels, reference } = flatLattice({
+    semiSpan,
+    chord: (u) => rootChord * Math.sqrt(Math.max(0, 1 - u * u)),
+    spanwise,
+    chordwise: 4,
+  });
+  for (const panel of panels) {
+    panel.a = { ...panel.a, y: panel.a.y + height };
+    panel.b = { ...panel.b, y: panel.b.y + height };
+    panel.control = { ...panel.control, y: panel.control.y + height };
+    panel.strip += base;
+  }
+  return { panels, reference };
+}
+
 const rectangular = (semiSpan: number, chord: number, opts: Partial<PlanformOptions> = {}) =>
   flatLattice({ semiSpan, chord: () => chord, ...opts });
 
@@ -294,5 +314,127 @@ describe('span loading', () => {
     // of the section coefficients is the wing's own.
     const mean = strips.reduce((sum, s) => sum + s.cl, 0) / strips.length;
     expect(mean).toBeCloseTo(CL, 2);
+  });
+});
+
+/**
+ * Two lifting surfaces, checked against the interference between them.
+ *
+ * Everything above is one wing. A whole aircraft is not: a tailplane trails its own
+ * sheet a short distance from the wing's, and the induced drag of the pair is not the
+ * sum of the two. That mutual term is what makes trim drag real, and it is also where a
+ * multi-surface Trefftz calculation goes wrong most quietly - chain two surfaces into
+ * one wake by accident and the answer stays smooth, plausible and badly wrong.
+ *
+ * Prandtl's biplane gives it two exact limits to be held to, with no table required.
+ */
+describe('two surfaces interfere', () => {
+  const SEMI_SPAN = 10;
+  const ROOT_CHORD = 2.5;
+  const SPANWISE = 80;
+
+  function biplane(gapOverSpan: number) {
+    const lower = stacked(SEMI_SPAN, ROOT_CHORD, SPANWISE, 0, 0);
+    const upper = stacked(SEMI_SPAN, ROOT_CHORD, SPANWISE, gapOverSpan * 2 * SEMI_SPAN, SPANWISE);
+    const result = solveLattice([...lower.panels, ...upper.panels], {
+      ...lower.reference,
+      stream: streamAt(4),
+      groups: [
+        { stripsPerSide: SPANWISE, mirrored: false },
+        { stripsPerSide: SPANWISE, mirrored: false },
+      ],
+    });
+    // For two equal wings each carrying half the load, e = 2 / (1 + sigma).
+    return { e: result.spanEfficiency, sigma: 2 / result.spanEfficiency - 1 };
+  }
+
+  /**
+   * Coincident sheets have to behave as a single wing: the interference factor is one,
+   * and the pair is no better than either alone. This is the limit that catches a wake
+   * built so that a surface does not see itself properly.
+   */
+  it('has full interference when the two wings are coincident', () => {
+    expect(biplane(0.001).sigma).toBeGreaterThan(0.93);
+    expect(biplane(0.001).sigma).toBeLessThanOrEqual(1.02);
+  });
+
+  /**
+   * Far apart they are two independent wings, each achieving its own minimum, so the
+   * system reaches twice the span efficiency of one. This is the limit that catches a
+   * mutual term that never decays - the sign of two wakes wrongly joined.
+   */
+  it('has almost no interference when the wings are two spans apart', () => {
+    const { sigma, e } = biplane(2);
+    expect(sigma).toBeLessThan(0.05);
+    expect(e).toBeGreaterThan(1.9);
+  });
+
+  /** And between the two, the interference has to fall away monotonically. */
+  it('loses interference monotonically as the gap opens', () => {
+    const gaps = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 1];
+    const sigmas = gaps.map((g) => biplane(g).sigma);
+    for (let i = 1; i < sigmas.length; i++) {
+      expect(sigmas[i]).toBeLessThan(sigmas[i - 1]);
+    }
+    // Prandtl's table for an equal-span biplane runs from about 0.7 at a tenth of a span
+    // to about 0.36 at half a span. The discretisation carries a couple of per cent of
+    // bias, so this is held to a band rather than to the figures.
+    expect(sigmas[1]).toBeGreaterThan(0.5);
+    expect(sigmas[1]).toBeLessThan(0.8);
+    expect(sigmas[5]).toBeGreaterThan(0.15);
+    expect(sigmas[5]).toBeLessThan(0.45);
+  });
+});
+
+/**
+ * The pitching moment, which is what the aircraft is trimmed on.
+ *
+ * It is reported about a given point and is nothing but a lever arm, so the thing worth
+ * testing is the sign and where it vanishes - both of which are easy to get backwards
+ * and impossible to see in a smooth number.
+ */
+describe('the lattice reports a pitching moment', () => {
+  const wing = () => rectangular(10, 2.5, { spanwise: 20 });
+
+  it('is zero when no moment reference is given', () => {
+    const { panels, reference } = wing();
+    expect(solveLattice(panels, { ...reference, stream: streamAt(4) }).Cm).toBe(0);
+  });
+
+  it('pitches nose up when the load is ahead of the reference point', () => {
+    const { panels, reference } = wing();
+    // The wing's quarter chord is on x = 0, so a reference point aft of it has the lift
+    // ahead of it.
+    const result = solveLattice(panels, {
+      ...reference,
+      stream: streamAt(4),
+      moment: { x: 5, chord: 2.5 },
+    });
+    expect(result.CL).toBeGreaterThan(0);
+    expect(result.Cm).toBeGreaterThan(0);
+  });
+
+  it('pitches nose down when the load is behind the reference point', () => {
+    const { panels, reference } = wing();
+    const result = solveLattice(panels, {
+      ...reference,
+      stream: streamAt(4),
+      moment: { x: -5, chord: 2.5 },
+    });
+    expect(result.Cm).toBeLessThan(0);
+  });
+
+  /**
+   * And it passes through zero in between. For a flat plate that crossing is the centre
+   * of pressure, which thin-airfoil theory puts at the quarter chord - so this is also a
+   * check that the lattice puts its load where it should.
+   */
+  it('passes through zero near the quarter chord', () => {
+    const { panels, reference } = wing();
+    const at = (x: number) =>
+      solveLattice(panels, { ...reference, stream: streamAt(4), moment: { x, chord: 2.5 } }).Cm;
+    expect(at(0.2)).toBeGreaterThan(0);
+    expect(at(-0.2)).toBeLessThan(0);
+    expect(Math.abs(at(0))).toBeLessThan(0.02);
   });
 });

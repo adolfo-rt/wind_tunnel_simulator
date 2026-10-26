@@ -1,7 +1,7 @@
 import type { AircraftSpec } from '../../aircraft/AircraftSpec';
 import { buildAircraft, type BuiltAircraft } from '../../aircraft/AircraftBuilder';
 import { cruiseConditions, estimateCruise, type CruiseEstimate } from './cruise';
-import { solveAtLift } from './trim';
+import { solveTrimmed } from './trim';
 import { wettedAreas } from './wetted';
 
 /**
@@ -22,16 +22,26 @@ export interface AircraftAnalysis {
   /** Lift coefficient on the published wing area. */
   liftCoefficient: number;
   spanEfficiency: number;
+  /** Stabiliser incidence the aircraft is trimmed at, degrees, leading edge up positive. */
+  stabiliserDeg: number;
+  /** Share of the aircraft's lift carried by the tailplane; a download is negative. */
+  tailLiftFraction: number;
   /** False when the trim or the drag correlations fall outside what the model can claim. */
   trustworthy: boolean;
 }
 
-export function analyseAircraft(spec: AircraftSpec, prebuilt?: BuiltAircraft): AircraftAnalysis {
+export function analyseAircraft(
+  spec: AircraftSpec,
+  prebuilt?: BuiltAircraft,
+  /** Spanwise stations per surface, for convergence studies. Production uses the default. */
+  stations?: number,
+): AircraftAnalysis {
   const built = prebuilt ?? buildAircraft(spec, 'low');
   const conditions = cruiseConditions(spec);
   const lift = spec.reference.cruiseMassKg * GRAVITY;
 
-  const trim = solveAtLift(built.aero, lift, conditions.dynamicPressure);
+  const request = stations === undefined ? built.aero : { ...built.aero, stations };
+  const trim = solveTrimmed(request, lift, conditions.dynamicPressure);
   const cruise = estimateCruise({
     spec,
     wetted: wettedAreas(built.group),
@@ -46,6 +56,8 @@ export function analyseAircraft(spec: AircraftSpec, prebuilt?: BuiltAircraft): A
     angleDeg: trim.angleDeg,
     liftCoefficient: cruise.liftCoefficient,
     spanEfficiency: trim.model.spanEfficiency,
+    stabiliserDeg: trim.stabiliserDeg,
+    tailLiftFraction: trim.tailLiftFraction,
     trustworthy: trim.plausible && cruise.applicable,
   };
 }
