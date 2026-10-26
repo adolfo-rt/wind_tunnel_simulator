@@ -371,7 +371,22 @@ export function solveAircraft(request: AircraftModelRequest): PanelAircraft {
         panel.strip = mapped;
       }
     }
-    result = solveLattice(panels, { area: referenceArea, span: referenceSpan, stream });
+    /*
+     * Which strips belong to which surface, so the Trefftz calculation can join each
+     * wake up into one sheet. Without it every strip in the aircraft is chained into a
+     * single wake, which runs from one wingtip back through the root and out to the
+     * other - a sheet with a fold in it, and an induced drag to match.
+     */
+    const groups = built.map((entry) => ({
+      stripsPerSide: entry.lattice.stripsPerSide,
+      mirrored: entry.surface.mirrored,
+    }));
+    result = solveLattice(panels, {
+      area: referenceArea,
+      span: referenceSpan,
+      stream,
+      groups,
+    });
   }
 
   const surfaces: SurfaceSolution[] = [];

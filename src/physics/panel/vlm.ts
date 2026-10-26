@@ -237,6 +237,93 @@ export interface LatticeReference {
   span: number;
   /** Free-stream speed. The answer is a coefficient, so only the direction matters. */
   stream: Vec3;
+  /**
+   * How the strips group into lifting surfaces, in strip-index order.
+   *
+   * The Trefftz calculation needs to know which strips form one continuous wake, because
+   * it represents each wake as a sheet rather than as loose filaments and a sheet has to
+   * be joined up. Omitted means one surface, which is what every test fixture is.
+   */
+  groups?: LatticeGroup[];
+}
+
+export interface LatticeGroup {
+  /** Strips on one side of this surface. */
+  stripsPerSide: number;
+  /** Whether the surface was built as two mirrored halves. */
+  mirrored: boolean;
+}
+
+/**
+ * Velocity induced in the cross-flow plane by a straight vortex sheet of constant
+ * strength, integrated along its length.
+ *
+ * This is what replaced a pair of point vortices per strip, and the difference is the
+ * whole reason the induced drag now converges. A point vortex a distance d away induces
+ * a velocity going as 1/d, so evaluating a strip's downwash half a strip width from its
+ * own shed vorticity divides by half a strip width - and refining the lattice makes that
+ * number smaller, not the error. The span efficiency fell steadily under refinement and
+ * never settled.
+ *
+ * A sheet has no such problem. Integrating the same vorticity along the length it is
+ * actually spread over gives, on the sheet itself, a normal velocity of exactly zero and
+ * a tangential one of plus or minus half the sheet strength - the familiar jump across a
+ * vortex sheet. Both are finite, and the principal value on the sheet is the average of
+ * the two sides, which is zero. Nothing is divided by the spacing, so refining the
+ * lattice refines the answer.
+ *
+ *     v = (g / 2pi) [ (1/2) ln(d0/d1) n - (atan(z0/h) - atan((z0-L)/h)) u ]
+ *
+ * with u along the sheet, n perpendicular to it, z0 and h the along and across distances
+ * to the start, and d0, d1 the squared distances to the two ends.
+ */
+export function sheetVelocity(
+  py: number,
+  pz: number,
+  ay: number,
+  az: number,
+  by: number,
+  bz: number,
+  strength: number,
+): { vy: number; vz: number } {
+  const uy = by - ay;
+  const uz = bz - az;
+  const length = Math.hypot(uy, uz);
+  if (length < 1e-12 || strength === 0) return { vy: 0, vz: 0 };
+
+  const ey = uy / length;
+  const ez = uz / length;
+  // Normal is the tangent turned a quarter turn, matching the sign of a point vortex.
+  const ny = -ez;
+  const nz = ey;
+
+  const ry = py - ay;
+  const rz = pz - az;
+  const along = ry * ey + rz * ez;
+  const across = ry * ny + rz * nz;
+
+  const d0 = along * along + across * across;
+  const d1 = (along - length) * (along - length) + across * across;
+  const logTerm = d0 > 1e-300 && d1 > 1e-300 ? 0.5 * Math.log(d0 / d1) : 0;
+
+  /*
+   * On the sheet the tangential term is the jump, and its principal value is zero. Off
+   * the sheet - which includes every panel of a winglet relative to the wing it grows
+   * from - the arctangents are taken normally.
+   */
+  let atanTerm = 0;
+  if (Math.abs(across) > 1e-9 * Math.max(1, length)) {
+    // Plain arctangents, not atan2. The formula is a difference of angles each within a
+    // quarter turn; atan2 wraps at the branch cut and turned a far-field sheet into one
+    // carrying a whole extra turn of circulation.
+    atanTerm = Math.atan(along / across) - Math.atan((along - length) / across);
+  }
+
+  const k = strength / (2 * Math.PI);
+  return {
+    vy: k * (logTerm * ny - atanTerm * ey),
+    vz: k * (logTerm * nz - atanTerm * ez),
+  };
 }
 
 /**
@@ -369,52 +456,137 @@ function summarise(
    * leaves the inboard edge and -Gamma at the outboard one.
    */
   /*
-   * A core radius, because the Trefftz plane has no streamwise coordinate in it.
+   * The wake, joined up into sheets.
    *
-   * Two filaments at the same height and spanwise station are coincident here however
-   * many metres apart they are along the aircraft - correct, since the plane sits
-   * infinitely far downstream, and singular without a core. The guard this replaces
-   * caught exact coincidence only, which is the one case that never happens.
-   *
-   * Deliberately tiny, and that is the whole difficulty. A core large enough to be felt
-   * blunts the wing's own spanwise gradient and flatters the answer: at a quarter of a
-   * strip width the validated elliptical planform came out at e = 1.045 and a rectangular
-   * one at 1.021, which is impossible - no planar wing beats elliptical. Induced drag is
-   * a singular integral and regularising it changes the result, so the only safe core is
-   * one small enough to leave the physics alone. At a fiftieth of a strip width the
-   * elliptical and rectangular checks both pass unchanged, and a filament landing a
-   * micrometre from another still divides by something.
-   *
-   * It is not a fix for anything. It was added while chasing an A380 that returned a span
-   * efficiency of 0.0002, and the A380 still does - see the note in `aircraftModel`.
+   * Each lifting surface trails one continuous sheet, and the strips have to be walked
+   * in the order they are physically joined before it can be built. A mirrored surface
+   * is stored as one side's strips followed by the other's, each running root to tip, so
+   * the chain across the whole span is the second half reversed and then the first - the
+   * same walk the trailing filaments take in `aircraftModel`, for the same reason.
    */
-  let meanWidth = 0;
-  for (let i = 0; i < stripCount; i++) meanWidth += stripWidth[i];
-  meanWidth = stripCount > 0 ? meanWidth / stripCount : 0;
-  const coreSq = Math.pow(0.02 * meanWidth, 2);
-
-  let drag = 0;
-  for (let i = 0; i < stripCount; i++) {
-    const y = 0.5 * (innerY[i] + outerY[i]);
-    const z = 0.5 * (innerZ[i] + outerZ[i]);
-    let vy = 0;
-    let vz = 0;
-    for (let j = 0; j < stripCount; j++) {
-      const edges: Array<[number, number, number]> = [
-        [innerY[j], innerZ[j], stripGamma[j]],
-        [outerY[j], outerZ[j], -stripGamma[j]],
-      ];
-      for (const [ey, ez, strength] of edges) {
-        const dy = y - ey;
-        const dz = z - ez;
-        const rsq = dy * dy + dz * dz + coreSq;
-        if (rsq < 1e-12) continue;
-        vy += (strength * -dz) / (2 * Math.PI * rsq);
-        vz += (strength * dy) / (2 * Math.PI * rsq);
+  const groups = reference.groups ?? [{ stripsPerSide: stripCount, mirrored: false }];
+  const chains: number[][] = [];
+  let base = 0;
+  for (const group of groups) {
+    const perSide = Math.max(0, Math.round(group.stripsPerSide));
+    const chain: number[] = [];
+    if (group.mirrored) {
+      for (let i = perSide - 1; i >= 0; i--) {
+        const index = base + perSide + i;
+        if (index < stripCount) chain.push(index);
       }
     }
-    const inflow = vy * normalY[i] + vz * normalZ[i];
-    drag += stripGamma[i] * inflow * stripWidth[i];
+    for (let i = 0; i < perSide; i++) {
+      const index = base + i;
+      if (index < stripCount) chain.push(index);
+    }
+    if (chain.length > 0) chains.push(chain);
+    base += perSide * (group.mirrored ? 2 : 1);
+  }
+  // Anything the groups did not account for is its own chain rather than silently lost.
+  for (let i = base; i < stripCount; i++) chains.push([i]);
+
+  /*
+   * Sheet panels run between the points where the circulation is known - the strip
+   * midpoints - and out to the tips, where it is zero. A panel's sheet strength is the
+   * change in circulation across it divided by its length, which is the discrete form of
+   * the shed vorticity being minus the gradient of the bound circulation.
+   *
+   * The downwash is then taken at each panel's OWN midpoint, not at the nodes. That is
+   * not a detail: a constant-strength sheet has a logarithmic singularity at its ends, so
+   * the nodes are the worst points on the whole wake to ask. Evaluating there gave the
+   * elliptical planform a span efficiency of 1.105 - ten per cent below the minimum
+   * induced drag, which is a theorem and cannot be beaten. At the panel midpoints the
+   * sheet's own contribution is exactly zero and every neighbour's is finite.
+   */
+  interface SheetPanel {
+    midY: number;
+    midZ: number;
+    ny: number;
+    nz: number;
+    length: number;
+    /** Circulation at the panel's midpoint, which is what the drag integral weights. */
+    gamma: number;
+    strength: number;
+    ay: number;
+    az: number;
+    by: number;
+    bz: number;
+  }
+
+  const sheets: SheetPanel[] = [];
+  for (const chain of chains) {
+    const nodeY: number[] = [innerY[chain[0]]];
+    const nodeZ: number[] = [innerZ[chain[0]]];
+    const nodeGamma: number[] = [0];
+    // Which way is up for this part of the sheet, taken from the strip that made it.
+    const nodeUpY: number[] = [normalY[chain[0]]];
+    const nodeUpZ: number[] = [normalZ[chain[0]]];
+    for (const i of chain) {
+      nodeY.push(0.5 * (innerY[i] + outerY[i]));
+      nodeZ.push(0.5 * (innerZ[i] + outerZ[i]));
+      nodeGamma.push(stripGamma[i]);
+      nodeUpY.push(normalY[i]);
+      nodeUpZ.push(normalZ[i]);
+    }
+    const last = chain[chain.length - 1];
+    nodeY.push(outerY[last]);
+    nodeZ.push(outerZ[last]);
+    nodeGamma.push(0);
+    nodeUpY.push(normalY[last]);
+    nodeUpZ.push(normalZ[last]);
+
+    for (let k = 0; k + 1 < nodeY.length; k++) {
+      const uy = nodeY[k + 1] - nodeY[k];
+      const uz = nodeZ[k + 1] - nodeZ[k];
+      const length = Math.hypot(uy, uz);
+      if (length < 1e-12) continue;
+
+      /*
+       * The panel's normal is turned to agree with the surface it came from, rather than
+       * taken from the direction the chain happens to be walked. Otherwise a surface
+       * chained the other way round contributes drag of the opposite sign, which is a
+       * sign error waiting for the first aircraft whose geometry walks differently.
+       */
+      let ny = -uz / length;
+      let nz = uy / length;
+      const upY = 0.5 * (nodeUpY[k] + nodeUpY[k + 1]);
+      const upZ = 0.5 * (nodeUpZ[k] + nodeUpZ[k + 1]);
+      if (ny * upY + nz * upZ < 0) {
+        ny = -ny;
+        nz = -nz;
+      }
+
+      sheets.push({
+        midY: 0.5 * (nodeY[k] + nodeY[k + 1]),
+        midZ: 0.5 * (nodeZ[k] + nodeZ[k + 1]),
+        ny,
+        nz,
+        length,
+        gamma: 0.5 * (nodeGamma[k] + nodeGamma[k + 1]),
+        strength: (nodeGamma[k + 1] - nodeGamma[k]) / length,
+        ay: nodeY[k],
+        az: nodeZ[k],
+        by: nodeY[k + 1],
+        bz: nodeZ[k + 1],
+      });
+    }
+  }
+
+  /*
+   * Induced drag is the work the wake's own downwash does on the circulation it carries,
+   * integrated over the sheet. Midpoint rule, one point per panel.
+   */
+  let drag = 0;
+  for (const at of sheets) {
+    let vy = 0;
+    let vz = 0;
+    for (const from of sheets) {
+      const v = sheetVelocity(at.midY, at.midZ, from.ay, from.az, from.by, from.bz, from.strength);
+      vy += v.vy;
+      vz += v.vz;
+    }
+    drag += at.gamma * (vy * at.ny + vz * at.nz) * at.length;
   }
   const CDi = -drag / (speed * speed * reference.area);
 

@@ -165,21 +165,26 @@ describe('finite span costs lift and adds drag', () => {
   it('gives the elliptical planform a span efficiency of about 1', () => {
     const span = 20;
     const rootChord = (4 * span) / (Math.PI * 8);
-    const { panels, reference } = elliptical(span / 2, rootChord, { spanwise: 40, chordwise: 4 });
+    const { panels, reference } = elliptical(span / 2, rootChord, { spanwise: 160, chordwise: 4 });
     const result = solveLattice(panels, { ...reference, stream: streamAt(4) });
     expect(result.spanEfficiency).toBeGreaterThan(0.99);
-    expect(result.spanEfficiency).toBeLessThan(1.04);
+    expect(result.spanEfficiency).toBeLessThan(1.02);
   });
 
   /**
    * A coarse lattice reports slightly *less* induced drag than the elliptical minimum,
    * which is impossible: the minimum is a theorem. It is discretisation, and the proof
    * that it is only discretisation is that it converges away at first order — each
-   * doubling of the strip count halves the excess. Measured: 1.0953, 1.0466, 1.0224,
-   * 1.0105, 1.0046, 1.0019 for 10 to 320 strips.
+   * doubling of the strip count roughly halves the excess. Measured with the vortex-sheet
+   * Trefftz plane: 1.1838, 1.0886, 1.0445, 1.0227, 1.0116 for 10 to 160 strips.
    *
-   * Worth a test of its own. An error that shrinks on refinement is a resolution choice;
-   * one that does not is a bug, and from a single coarse number the two look identical.
+   * This is the test the whole induced-drag rewrite exists for. The previous formulation
+   * passed it too, on this planform, while failing to converge on every real wing in the
+   * roster - so it is run below on a rectangular planform as well, where the loading has
+   * a tip singularity that an elliptical one does not.
+   *
+   * An error that shrinks on refinement is a resolution choice; one that does not is a
+   * bug, and from a single coarse number the two look identical.
    */
   it('converges onto that minimum as the lattice is refined', () => {
     const span = 20;
@@ -192,17 +197,46 @@ describe('finite span costs lift and adds drag', () => {
     const coarse = excess(20);
     const fine = excess(40);
     const finer = excess(80);
+    const finest = excess(160);
 
     expect(coarse).toBeGreaterThan(0);
     expect(fine).toBeLessThan(coarse * 0.6);
     expect(finer).toBeLessThan(fine * 0.6);
-    expect(finer).toBeLessThan(0.02);
+    expect(finest).toBeLessThan(finer * 0.6);
+    expect(finest).toBeLessThan(0.02);
+  });
+
+  /**
+   * And the same on a rectangular planform, which is the case the old formulation could
+   * not do. Its loading carries a square-root singularity at the tip that an elliptical
+   * one does not, and representing the wake as point vortices meant evaluating each
+   * strip's downwash half a strip width from its own shed vorticity — so refining the
+   * lattice shrank the thing being divided by rather than the error. Every real wing in
+   * the roster behaved the same way and none of them settled.
+   *
+   * Measured with the sheet formulation: 1.2126, 1.0872, 1.0255, 0.9902, 0.9672 for 10 to
+   * 160 strips, passing below 1 where it must and still tightening.
+   */
+  it('converges on a planform whose loading is singular at the tip', () => {
+    const span = 20;
+    const chord = span / 8;
+    const at = (spanwise: number) => {
+      const { panels, reference } = rectangular(span / 2, chord, { spanwise, chordwise: 4 });
+      return solveLattice(panels, { ...reference, stream: streamAt(4) }).spanEfficiency;
+    };
+
+    const steps = [20, 40, 80, 160].map(at);
+    // Monotone, and each step smaller than the last: a sequence settling, not wandering.
+    for (let i = 1; i < steps.length; i++) expect(steps[i]).toBeLessThan(steps[i - 1]);
+    for (let i = 2; i < steps.length; i++) {
+      expect(Math.abs(steps[i] - steps[i - 1])).toBeLessThan(Math.abs(steps[i - 1] - steps[i - 2]));
+    }
   });
 
   it('penalises a rectangular planform, which is why wings are tapered', () => {
     const span = 20;
     const chord = span / 8;
-    const { panels, reference } = rectangular(span / 2, chord, { spanwise: 40, chordwise: 4 });
+    const { panels, reference } = rectangular(span / 2, chord, { spanwise: 160, chordwise: 4 });
     const result = solveLattice(panels, { ...reference, stream: streamAt(4) });
     expect(result.spanEfficiency).toBeLessThan(0.99);
     expect(result.spanEfficiency).toBeGreaterThan(0.85);

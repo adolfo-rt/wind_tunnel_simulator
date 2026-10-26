@@ -76,6 +76,14 @@ export interface LiftingSurfaceParams {
 const DEG = Math.PI / 180;
 
 /**
+ * Closest two spanwise stations may sit, as a fraction of the nominal spacing.
+ *
+ * Three tenths: close enough that a planform break is still placed where it belongs, far
+ * enough that the strip it makes with its neighbour is never a sliver.
+ */
+const SLIVER_FRACTION = 0.3;
+
+/**
  * Camber at a spanwise fraction, interpolated root to tip like thickness.
  *
  * Linear, because the thing it exists to pay for - washout - is linear in the span here,
@@ -281,13 +289,43 @@ export function liftingSurfaceFrames(params: LiftingSurfaceParams): SurfaceFrame
    * The breaks are INSERTED rather than snapping the nearest station onto them. Moving
    * a station is fine in the middle of the span but silently truncates the wing when the
    * break happens to fall next to the tip, which is exactly where a rake begins.
+   *
+   * Inserting alone leaves slivers, though, and they are not cosmetic. When a break lands
+   * close to a station that is already there, the pair bracket a strip a fraction of its
+   * neighbours' width: on a Comet at 32 stations the kink at u = 0.420 fell beside the
+   * grid point at 0.419 and left a strip 11 millimetres wide between strips of 565. The
+   * lattice tolerates that. The induced drag does not, because the Trefftz sum evaluates
+   * each strip's downwash half a strip width from that strip's own shed vorticity, and
+   * half of eleven millimetres is a very small number to divide by. That is why span
+   * efficiency wandered instead of converging under refinement, and why it wandered
+   * differently for every aircraft: whether a sliver appears at all depends on where the
+   * break happens to fall between two grid points.
+   *
+   * So a station too close to its neighbour is dropped, and a break always wins over a
+   * grid point. Both ends are breaks, so the wing still cannot be truncated.
    */
   const kinkFrac = params.kinkFrac ?? 0;
-  const stationSet = new Set<number>();
-  for (let i = 0; i < stationCount; i++) stationSet.add(i / (stationCount - 1));
-  if (kinkFrac > 0 && kinkFrac < 1) stationSet.add(kinkFrac);
-  if (isRaked) stationSet.add(rakeStart);
-  const stations = [...stationSet].sort((a, b) => a - b);
+  const required = new Set<number>([0, 1]);
+  if (kinkFrac > 0 && kinkFrac < 1) required.add(kinkFrac);
+  if (isRaked) required.add(rakeStart);
+
+  const candidates = new Set<number>(required);
+  for (let i = 0; i < stationCount; i++) candidates.add(i / (stationCount - 1));
+
+  const minGap = SLIVER_FRACTION / Math.max(1, stationCount - 1);
+  const stations: number[] = [];
+  for (const u of [...candidates].sort((a, b) => a - b)) {
+    const last = stations[stations.length - 1];
+    if (stations.length === 0 || u - last >= minGap) {
+      stations.push(u);
+    } else if (required.has(u) && !required.has(last)) {
+      // A break displaces the grid point it landed on rather than joining it.
+      stations[stations.length - 1] = u;
+    } else if (required.has(u) && required.has(last)) {
+      // Two breaks genuinely this close: keep both, there is nothing else to do.
+      stations.push(u);
+    }
+  }
 
   const frames: SectionFrame[] = [];
   for (const u of stations) {
