@@ -3,6 +3,7 @@ import { Viewer } from './core/Viewer';
 import { DEFAULT_STATE, Store, type AppState } from './core/Store';
 import { SelectorPanel } from './ui/SelectorPanel';
 import { InfoPanel } from './ui/InfoPanel';
+import { AnalysisPanel } from './ui/AnalysisPanel';
 import { Controls } from './ui/Controls';
 import { WindTunnel } from './tunnel/Tunnel';
 import { kmhToMs } from './core/atmosphere';
@@ -60,6 +61,15 @@ const infoPanel = new InfoPanel({
 
 const selector = new SelectorPanel({
   container: document.getElementById('aircraft-list') as HTMLElement,
+  onSelect: (spec) => select(spec.id),
+});
+
+const analysisPanel = new AnalysisPanel({
+  panel: document.getElementById('analysis') as HTMLElement,
+  openButton: document.getElementById('analysis-open') as HTMLButtonElement,
+  closeButton: document.getElementById('analysis-close') as HTMLButtonElement,
+  title: document.getElementById('analysis-title') as HTMLElement,
+  body: document.getElementById('analysis-body') as HTMLElement,
   onSelect: (spec) => select(spec.id),
 });
 
@@ -408,6 +418,7 @@ async function load(spec: AircraftSpec): Promise<void> {
   infoPanel.show(spec);
   trackInfoHeight();
   controls.setAircraft(spec);
+  analysisPanel.show(spec);
 
   // Hand the aircraft to the solver: size the grid to the working section, then build
   // the obstacle field off-thread and drop it in when it is ready.

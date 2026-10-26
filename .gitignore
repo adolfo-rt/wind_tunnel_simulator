@@ -6,6 +6,7 @@ dist/
 coverage/
 serve/
 shots/
+analysis*.png
 
 # Scratch diagnostics. They live in scripts/ because node has to resolve playwright
 # from the project, but they are session tools, not project assets - the keepers are

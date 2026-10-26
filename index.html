@@ -195,6 +195,36 @@
         </div>
       </section>
 
+      <button
+        type="button"
+        id="analysis-open"
+        class="chip analysis-open"
+        aria-expanded="false"
+        aria-controls="analysis"
+      >
+        Cruise analysis
+      </button>
+
+      <section
+        id="analysis"
+        class="analysis-sheet"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="analysis-title"
+        hidden
+      >
+        <header class="analysis-head">
+          <div>
+            <p class="analysis-eyebrow">Cruise analysis</p>
+            <h2 id="analysis-title"></h2>
+          </div>
+          <button type="button" id="analysis-close" class="analysis-close" aria-label="Close">
+            &times;
+          </button>
+        </header>
+        <div id="analysis-body" class="analysis-scroll"></div>
+      </section>
+
       <div id="loading" class="loading" hidden><span></span>Building aircraft…</div>
 
       <footer class="hint">Drag to orbit &middot; scroll to zoom &middot; right-drag to pan</footer>

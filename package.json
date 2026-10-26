@@ -17,7 +17,9 @@
     "verify:streamlines": "node scripts/verify-streamlines.mjs",
     "verify:pressure": "node scripts/verify-pressure.mjs",
     "verify:wake": "node scripts/verify-wake.mjs",
-    "verify:clock": "node scripts/verify-clock.mjs"
+    "verify:clock": "node scripts/verify-clock.mjs",
+    "verify:analysis": "node scripts/verify-analysis.mjs",
+    "dataset": "WRITE_DATASET=1 vitest run tests/cruiseDataset.test.ts"
   },
   "dependencies": {
     "three": "^0.180.0"

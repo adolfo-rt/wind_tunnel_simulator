@@ -46,7 +46,7 @@ The project is built in stages, each independently testable.
 | 5 | Surface pressure visualisation | Done |
 | 6 | Turbulence and wake | Done |
 | 7 | Performance and quality tiers | Skipped |
-| 8 | Fuel-efficiency analytics | Physics done, interface pending |
+| 8 | Fuel-efficiency analytics | Done |
 
 ## How the aircraft are made
 
@@ -424,6 +424,25 @@ Mason's fourth power.
 **Published** — mass, seat count, thrust-specific fuel consumption, wing area and span.
 These are book values and are never adjusted to improve agreement.
 
+### The analysis sheet
+
+**Cruise analysis**, bottom left, opens a sheet over the tunnel. It carries the headline
+figures for the aircraft on screen, the chart of fuel per seat across the eras, and the
+drag broken down by where it goes.
+
+It is a sheet rather than a fourth card in a corner because the chart is the argument the
+whole project is making, and a chart squeezed into a 300-pixel column is a decoration.
+Every figure wears a badge saying whether it was simulated, derived or published, and the
+sheet ends with what those three words mean. Points on the chart are clickable: picking
+one loads that aircraft into the tunnel.
+
+The roster's figures are precomputed into `src/physics/performance/cruiseDataset.ts`,
+because a trimmed solve is about a second and a half per aircraft and the chart needs all
+twenty-one at once. They come from the same code the application runs, and
+`tests/cruiseDataset.test.ts` recomputes the whole roster on every test run and fails if
+the committed numbers have drifted — a cache nobody checks is a lie waiting to happen.
+Rebuild it with `npm run dataset`.
+
 ### Trimming, and why it mattered
 
 The aircraft is solved for the angle of attack *and* the stabiliser incidence that
@@ -558,6 +577,18 @@ npm run verify:streamlines                        # physics of the tracers
 npm run verify:pressure                           # physics of the surface pressure
 npm run verify:wake                               # physics of the trailing wake
 npm run verify:clock                              # the simulation runs on one clock
+npm run verify:analysis                           # the cruise analysis sheet and its chart
+```
+
+`verify:analysis` is the one that keeps the chart honest. A chart is the part of a
+project that can be entirely wrong and still look finished, so it measures rather than
+looks: every mark carries the value it was drawn from, more fuel has to plot higher, a
+later aircraft has to plot further right, the axis has to contain the data, exactly one
+mark may be emphasised, the stacked bar's segments have to add up to the bar, and every
+headline figure has to carry its provenance badge.
+
+```bash
+npm run dataset   # recompute the precomputed cruise figures
 ```
 
 ## Layout
