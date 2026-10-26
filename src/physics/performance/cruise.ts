@@ -93,9 +93,17 @@ export interface CruiseEstimate {
  * along its length - a different calculation needing a different geometry.
  *
  * Concorde is the one aircraft in the roster this excludes, and the correlation does not
- * fail quietly about it: extrapolated to Mach 2.02 it returns a wave drag twenty times
- * the aircraft's weight. Reporting that as a lift-to-drag ratio of zero would be worse
- * than reporting nothing.
+ * fail quietly about it. Extrapolated to Mach 2.02 it puts drag divergence at Mach 1.285,
+ * takes the 0.735 of overshoot to the fourth power, and returns a wave drag coefficient
+ * of 5.84 - a wave drag of 42,800 kN against an aircraft weighing 1,570, or 27 times its
+ * own weight, for a lift-to-drag ratio of 0.04 against a published 7.5. Reporting that
+ * would be worse than reporting nothing.
+ *
+ * Two other parts of the model would be wrong at that speed even with a supersonic wave
+ * drag term. A slender delta draws much of its lift from the vortices rolling off its
+ * sharp leading edges, which a lattice assuming attached flow cannot see; and the
+ * compressibility factor in the skin friction is a transonic correction being asked
+ * about Mach 2, on a skin that ran at about 120 degrees from kinetic heating.
  */
 const SUPERSONIC_LIMIT = 0.95;
 
