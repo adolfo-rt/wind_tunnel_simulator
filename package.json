@@ -19,6 +19,7 @@
     "verify:wake": "node scripts/verify-wake.mjs",
     "verify:clock": "node scripts/verify-clock.mjs",
     "verify:analysis": "node scripts/verify-analysis.mjs",
+    "verify:quality": "node scripts/verify-quality.mjs",
     "dataset": "WRITE_DATASET=1 vitest run tests/cruiseDataset.test.ts"
   },
   "dependencies": {

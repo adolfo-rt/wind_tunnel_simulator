@@ -1,3 +1,5 @@
+import type { QualityTier } from './quality';
+
 /**
  * A very small reactive store.
  *
@@ -51,10 +53,15 @@ export interface AppState {
   speedKmh: number;
   /** True while geometry is being generated. */
   building: boolean;
+  /** Which quality tier the simulation is running at, from Stage 7 onwards. */
+  quality: QualityTier;
 }
 
 export const DEFAULT_STATE: AppState = {
   aircraftId: null,
   speedKmh: 900,
   building: false,
+  // Starts at the top and measures. The frame meter steps it down if the machine cannot
+  // hold it, which is evidence rather than a guess about the hardware.
+  quality: 'high',
 };

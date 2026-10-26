@@ -23,14 +23,36 @@ import { SdfBuilder } from './physics/sdf/SdfBuilder';
 import { sampleSdf, type SdfGrid } from './physics/sdf/buildSdf';
 import { Box3, Sphere, Vector3 } from 'three';
 import { buildAircraft, type BuiltAircraft } from './aircraft/AircraftBuilder';
+import { QUALITY, type QualityTier } from './core/quality';
+import { FrameMeter } from './core/FrameMeter';
 import { ROSTER, specById } from './aircraft/roster';
 import type { AircraftSpec } from './aircraft/AircraftSpec';
 
 const canvas = document.getElementById('viewport') as HTMLCanvasElement;
 const loading = document.getElementById('loading') as HTMLElement;
 
-const viewer = new Viewer({ canvas });
-const store = new Store<AppState>({ ...DEFAULT_STATE });
+/**
+ * The tier to start at.
+ *
+ * A choice made by hand is remembered, because being measured and demoted again on every
+ * visit would be both wrong and irritating - the viewer has already said what they want.
+ * With nothing remembered the app starts at the top and lets the frame meter decide.
+ */
+function rememberedTier(): QualityTier | null {
+  try {
+    const saved = localStorage.getItem('windtunnel.quality');
+    return saved === 'low' || saved === 'balanced' || saved === 'high' ? saved : null;
+  } catch {
+    // Private browsing, or storage disabled. Not a reason to fail to start.
+    return null;
+  }
+}
+
+const startingTier = rememberedTier();
+let tier: QualityTier = startingTier ?? DEFAULT_STATE.quality;
+
+const viewer = new Viewer({ canvas, maxPixelRatio: QUALITY[tier].maxPixelRatio });
+const store = new Store<AppState>({ ...DEFAULT_STATE, quality: tier });
 
 const infoCard = document.getElementById('info') as HTMLElement;
 
@@ -97,7 +119,11 @@ tunnel.setSpeed(kmhToMs(store.get().speedKmh));
 
 // ---- Flow solver ------------------------------------------------------------
 
-const solver = new FlowSolver({ renderer: viewer.renderer });
+const solver = new FlowSolver({
+  renderer: viewer.renderer,
+  resolution: QUALITY[tier].flowResolution,
+  jacobiIterations: QUALITY[tier].jacobiIterations,
+});
 const clock = new SimulationClock();
 const sdfBuilder = new SdfBuilder();
 const slice = new SliceView();
@@ -161,6 +187,9 @@ const streamlineNote = document.getElementById('streamline-note') as HTMLElement
 const densityButtons = [
   ...document.querySelectorAll<HTMLButtonElement>('#streamline-density .axis'),
 ];
+const tierButtons = [...document.querySelectorAll<HTMLButtonElement>('#quality-tiers .axis')];
+const qualityNote = document.getElementById('quality-note') as HTMLElement;
+const perfReadouts = document.getElementById('perf-readouts') as HTMLElement;
 
 slice.setVisible(sliceEnabled.checked);
 slice.setPosition(Number(slicePosition.value) / 1000);
@@ -238,7 +267,7 @@ updateLegendVisibility();
 
 // ---- Streamlines ------------------------------------------------------------
 
-let density: StreamlineDensity = 'medium';
+let density: StreamlineDensity = QUALITY[tier].streamlines;
 
 /**
  * Say what the picture is doing.
@@ -286,9 +315,170 @@ for (const button of densityButtons) {
 describeStreamlines();
 updateLegendVisibility();
 
+// ---- Quality tiers ----------------------------------------------------------
+
+/*
+ * One dial over the solver grid, the obstacle field, the mesh, the tracers and the pixel
+ * ratio. What it must NOT touch is anything the app reports: the lift-to-drag ratio, the
+ * span efficiency and the fuel figures come from the panel method at a fixed station
+ * count and a fixed tessellation, and `tests/quality.test.ts` holds that line.
+ */
+
+/** True once the viewer has chosen by hand, which stops the meter second-guessing them. */
+let tierChosenByHand = startingTier !== null;
+
+const frameMeter = new FrameMeter({
+  onDemote: (to, stats) => {
+    const was = QUALITY[tier].label;
+    const reason = `${was} was running at ${Math.round(stats.fps ?? 0)} fps`;
+    /*
+     * Deferred out of the frame it was decided in.
+     *
+     * `onDemote` is called from inside the render callback, and applying a tier
+     * reallocates the solver's render targets. Doing that halfway through a frame would
+     * pull the velocity target out from under the slice and the streamlines, which are
+     * holding it for this frame's draw. A timeout puts it in the next task, after the
+     * frame has finished with everything it borrowed.
+     */
+    setTimeout(() => applyQuality(to, { reason }), 0);
+  },
+});
+frameMeter.setTier(tier);
+if (tierChosenByHand) frameMeter.stopAdjusting();
+
+function paintTierButtons(): void {
+  for (const button of tierButtons) {
+    button.setAttribute('aria-pressed', String(button.dataset.tier === tier));
+  }
+  for (const button of densityButtons) {
+    button.setAttribute('aria-pressed', String(button.dataset.density === density));
+  }
+}
+
+function describeQuality(reason?: string): void {
+  const settings = QUALITY[tier];
+  const auto = frameMeter.adjusting ? ' Measuring; it will drop a tier if this is too much.' : '';
+  qualityNote.textContent = reason
+    ? `Dropped to ${settings.label}: ${reason}. ${settings.cost} Pick one yourself to stop it adjusting.`
+    : `${settings.cost}${auto}`;
+}
+
+/**
+ * Switch tiers.
+ *
+ * The solver resolution and the pixel ratio change in place. The mesh tessellation and
+ * the obstacle field cannot - both are baked when the aircraft is built - so a tier that
+ * changes either reloads the aircraft. That is a visible hitch, which is why the meter
+ * only ever demotes, and only on a median over ninety frames.
+ */
+function applyQuality(next: QualityTier, options: { byHand?: boolean; reason?: string } = {}): void {
+  const previous = QUALITY[tier];
+  const settings = QUALITY[next];
+  const needsRebuild =
+    previous.meshDetail !== settings.meshDetail || previous.sdfResolution !== settings.sdfResolution;
+
+  tier = next;
+  store.set({ quality: next });
+
+  if (options.byHand) {
+    tierChosenByHand = true;
+    frameMeter.stopAdjusting();
+    try {
+      localStorage.setItem('windtunnel.quality', next);
+    } catch {
+      // Nothing to do about it, and not worth failing a click over.
+    }
+  }
+
+  viewer.setMaxPixelRatio(settings.maxPixelRatio);
+  solver.setJacobiIterations(settings.jacobiIterations);
+  if (solver.supported) {
+    solver.setResolution(settings.flowResolution, viewer.renderer.capabilities.maxTextureSize);
+  }
+  density = settings.streamlines;
+  streamlines.setCount(STREAMLINE_COUNTS[density], tunnel.size.radius);
+
+  frameMeter.setTier(next);
+  paintTierButtons();
+  describeQuality(options.reason);
+  describeStreamlines();
+
+  const spec = current?.spec ?? specById(store.get().aircraftId ?? '');
+  if (needsRebuild && spec) void load(spec);
+  else if (solver.supported) solver.reset();
+}
+
+for (const button of tierButtons) {
+  button.addEventListener('click', () => {
+    const next = button.dataset.tier as QualityTier;
+    if (next !== tier) applyQuality(next, { byHand: true });
+    else {
+      // Clicking the tier already running is how you say "stop adjusting" without
+      // changing anything.
+      tierChosenByHand = true;
+      frameMeter.stopAdjusting();
+      describeQuality();
+    }
+  });
+}
+
+/** Frame rate, and what it is being spent on. */
+function paintPerformance(): void {
+  const stats = frameMeter.stats;
+  const rows: Array<[string, string, boolean]> = [
+    [
+      'Frame rate',
+      stats.fps === null ? 'measuring…' : `${Math.round(stats.fps)} fps`,
+      stats.fps !== null && stats.fps < 20,
+    ],
+    [
+      'Frame time',
+      stats.medianMs === null
+        ? '—'
+        : `${stats.medianMs.toFixed(1)} ms · worst ${stats.worstMs?.toFixed(0)} · ${stats.samples} frames`,
+      false,
+    ],
+    ['Render scale', `${viewer.pixelRatio.toFixed(2)}×`, false],
+  ];
+  const fragment = document.createDocumentFragment();
+  for (const [label, value, slow] of rows) {
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    if (slow) dd.dataset.state = 'slow';
+    fragment.append(dt, dd);
+  }
+  perfReadouts.replaceChildren(fragment);
+}
+
+/*
+ * Coming back to a backgrounded tab produces one enormous frame and then a few slow ones
+ * while the GPU wakes up. The meter discards the enormous one, but the window either
+ * side of a hidden tab is still two different measurements stitched together, so it is
+ * thrown away rather than averaged.
+ */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') frameMeter.restart();
+});
+
+paintTierButtons();
+describeQuality();
+paintPerformance();
+
 if (!solver.supported) {
   flowStatus.dataset.state = 'unsupported';
-  flowStatus.textContent = `Flow solver unavailable: ${solver.unsupportedReason}. An analytic model arrives in stage 7.`;
+  /*
+   * This used to promise an analytic model "in stage 7". Stage 7 turned out to be the
+   * quality tiers, and a CPU field good enough to drive the streamlines is a different
+   * and much larger job, so the promise is withdrawn rather than left standing. What is
+   * true is worth saying instead: two of the three things on this panel never needed the
+   * grid, because the panel method and the vortex lattice run on the CPU.
+   */
+  flowStatus.textContent =
+    `Flow solver unavailable: ${solver.unsupportedReason}. Surface pressure and the ` +
+    `cruise analysis still work — both are solved on the CPU. The streamlines and the ` +
+    `flow slice read the grid, so they are off.`;
   sliceEnabled.disabled = true;
   slicePosition.disabled = true;
   for (const button of fieldButtons) button.disabled = true;
@@ -297,6 +487,8 @@ if (!solver.supported) {
   for (const button of densityButtons) button.disabled = true;
   streamlineNote.textContent = '';
   updateLegendVisibility();
+  // The tier buttons stay live: without a solver they still drive the mesh tessellation
+  // and the pixel ratio, which is most of what a slow machine needs turned down.
 }
 
 /**
@@ -317,6 +509,11 @@ solver.onReset(settleFlow);
 viewer.onFrame((delta, elapsed) => {
   tunnel.update(delta);
   controls.setRpm(tunnel.rpm, elapsed);
+  // Measured every frame, read a few times a second: the median is what decides, and
+  // rewriting the DOM at sixty hertz would be its own performance problem. The meter
+  // times itself rather than taking `delta`, which the viewer clamps to a tenth of a
+  // second and which would therefore hide every machine slower than ten frames a second.
+  frameMeter.sample();
 
   if (solver.supported && current) {
     /*
@@ -349,7 +546,13 @@ viewer.onFrame((delta, elapsed) => {
       flowStatus.textContent =
         `${grid.x}×${grid.y}×${grid.z} cells (${(cells / 1000).toFixed(0)}k) · ` +
         `${jacobiIterations} pressure iterations · ${steps} steps`;
+      paintPerformance();
     }
+  } else if (elapsed - lastStatusPaint > 0.25) {
+    // No solver, but the frame rate is still worth showing - it is the only thing that
+    // says whether the tier is right for this machine.
+    lastStatusPaint = elapsed;
+    paintPerformance();
   }
 });
 
@@ -381,7 +584,7 @@ async function load(spec: AircraftSpec): Promise<void> {
   // A rapid series of clicks should only ever build the last one asked for.
   if (pendingId !== spec.id) return;
 
-  const built = buildAircraft(spec, 'high');
+  const built = buildAircraft(spec, QUALITY[tier].meshDetail);
   // Before the group is ever rendered: three.js caches a compiled program the first time
   // it draws a material, and a patch applied afterwards would not be in it.
   pressure.attach(built.surfaces);
@@ -443,7 +646,7 @@ async function load(spec: AircraftSpec): Promise<void> {
     flowStatus.textContent = 'Building the obstacle field…';
 
     sdfBuilder
-      .build(built.solid, { resolution: 96 })
+      .build(built.solid, { resolution: QUALITY[tier].sdfResolution })
       .then((sdf) => {
         if (current !== built) return;
         solver.setObstacle(sdf);
@@ -462,6 +665,8 @@ async function load(spec: AircraftSpec): Promise<void> {
   selector.setActive(spec.id);
   store.set({ aircraftId: spec.id, building: false });
   loading.hidden = true;
+  // The frames either side of a rebuild are not measurements of the same scene.
+  frameMeter.restart();
 }
 
 function select(id: string): void {

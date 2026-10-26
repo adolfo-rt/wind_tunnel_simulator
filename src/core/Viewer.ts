@@ -48,6 +48,7 @@ export class Viewer {
   private elapsed = 0;
   private running = false;
   private resizeObserver: ResizeObserver;
+  private maxPixelRatio: number;
 
   constructor(options: ViewerOptions) {
     const { canvas } = options;
@@ -58,7 +59,8 @@ export class Viewer {
       powerPreference: 'high-performance',
       stencil: false,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, options.maxPixelRatio ?? 1.5));
+    this.maxPixelRatio = options.maxPixelRatio ?? 1.5;
+    this.applyPixelRatio();
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
@@ -115,6 +117,32 @@ export class Viewer {
     this.scene.add(rim);
 
     this.scene.add(new HemisphereLight(0xbcd4ff, 0x20252e, 0.85));
+  }
+
+  /**
+   * Cap the device pixel ratio.
+   *
+   * The cheapest large saving there is on a retina screen: every pixel is shaded by the
+   * aircraft material, which samples the velocity field, so going from 1.5 to 1 is a
+   * little over half the fragment work for the whole scene. It is also the first thing
+   * to give up, because a slightly softer edge costs the viewer far less than a frame
+   * rate that makes the orbit controls feel disconnected.
+   */
+  setMaxPixelRatio(ratio: number): void {
+    const next = Math.max(0.5, ratio);
+    if (next === this.maxPixelRatio) return;
+    this.maxPixelRatio = next;
+    this.applyPixelRatio();
+    // setPixelRatio alone leaves the drawing buffer at the old size.
+    this.resize();
+  }
+
+  get pixelRatio(): number {
+    return this.renderer.getPixelRatio();
+  }
+
+  private applyPixelRatio(): void {
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.maxPixelRatio));
   }
 
   resize(): void {

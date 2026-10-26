@@ -191,6 +191,28 @@
               wing gives the two tip vortices.
             </p>
           </div>
+          <div class="flow-head">
+            <span class="quality-title">Quality</span>
+            <div
+              class="axis-group"
+              id="quality-tiers"
+              role="group"
+              aria-label="Simulation quality"
+            >
+              <button type="button" class="axis" data-tier="low" aria-pressed="false">
+                Low
+              </button>
+              <button type="button" class="axis" data-tier="balanced" aria-pressed="false">
+                Balanced
+              </button>
+              <button type="button" class="axis" data-tier="high" aria-pressed="true">
+                High
+              </button>
+            </div>
+          </div>
+          <p class="flow-note" id="quality-note"></p>
+          <dl class="readouts perf-readouts" id="perf-readouts"></dl>
+
           <p class="flow-status" id="flow-status">Solver starting…</p>
         </div>
       </section>

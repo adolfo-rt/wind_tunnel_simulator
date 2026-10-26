@@ -45,6 +45,16 @@ export type DetailLevel = 'low' | 'high';
 
 export interface BuiltAircraft {
   spec: AircraftSpec;
+  /**
+   * The tessellation this was built at.
+   *
+   * Recorded because the wetted area is measured off these triangles, and a finer mesh
+   * of a curved body has more of them: switching a 787 from low to high detail raises
+   * its wetted area by 1.6% and moves its lift-to-drag ratio by the same. That is a
+   * rendering setting reaching the physics, so the analysis checks this field rather
+   * than trusting whatever mesh it was handed.
+   */
+  detail: DetailLevel;
   group: Group;
   /** Merged aerodynamic solid in aircraft-local coordinates. */
   solid: BufferGeometry;
@@ -450,6 +460,7 @@ export function buildAircraft(spec: AircraftSpec, detail: DetailLevel = 'high'):
 
   return {
     spec,
+    detail,
     group,
     solid: merged,
     bounds,

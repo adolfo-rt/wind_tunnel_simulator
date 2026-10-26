@@ -45,7 +45,7 @@ The project is built in stages, each independently testable.
 | 4 | Volumetric streamlines | Done |
 | 5 | Surface pressure visualisation | Done |
 | 6 | Turbulence and wake | Done |
-| 7 | Performance and quality tiers | Skipped |
+| 7 | Performance and quality tiers | Done |
 | 8 | Fuel-efficiency analytics | Done |
 
 ## How the aircraft are made
@@ -403,6 +403,70 @@ downwash across the span, the upwash beyond the tips and the induced drag are ri
 resolution. The strength of the vortex is correct; only its concentration is as tight as
 the grid allows.
 
+## Quality tiers
+
+Everything that trades frame rate against fidelity is on one dial, in
+`src/core/quality.ts`: the solver grid, the pressure sweeps, the obstacle field, the
+aircraft tessellation, the tracer count and the render scale.
+
+| | Low | Balanced | High |
+|---|---|---|---|
+| Flow grid | 64 cells | 96 | 128 |
+| Cells total | 62k | 212k | 508k |
+| Pressure sweeps | 20 | 30 | 40 |
+| Obstacle field | 64³ | 80³ | 96³ |
+| Aircraft mesh | low | high | high |
+| Tracers | 1,024 | 4,096 | 16,384 |
+| Render scale | 1.0× | 1.25× | 1.5× |
+
+High is what every stage before this one ran at unconditionally, so the top tier is not
+new behaviour — it is the old behaviour, named and no longer compulsory. The spread is
+worth having: a step from High to Low is about thirty times less solver work.
+
+### The rule the tiers must not break
+
+**A tier changes what the grid resolves and how the picture looks. It never changes a
+number the application reports.** Lift-to-drag, span efficiency and fuel per seat come
+from the panel method and the vortex lattice on the CPU, at a station count fixed by
+`AERO_STATIONS` and a tessellation fixed by `AERO_DETAIL`.
+
+That rule had already been broken twice, both times expensively. A lattice taking its
+station count from the visual detail gave a 737 MAX a lift-to-drag ratio of 16.9 at high
+detail and 14.6 at low. A filament core radius measured in panel widths grew at low
+detail until it lifted a 777's tip section above its root, which washout makes
+impossible. Building this stage found a third: wetted area is measured off real
+triangles, so a finer mesh has more of it, and a 787 at high detail reported 1.6% more
+wetted area and 1.6% less lift-to-drag than the same aircraft at low. Handing the viewer
+a control that changes mesh detail would have made that a user-visible inconsistency, so
+the measurement is now pinned to one tessellation regardless of what is on screen.
+`tests/quality.test.ts` holds the line, and `npm run verify:quality` checks it again in
+the real app.
+
+### Choosing a tier
+
+The app starts at High and measures. If the machine cannot hold it the frame meter steps
+down a tier and says why; a tier chosen by hand is remembered and stops the meter
+adjusting. It only ever steps **down** — any promotion threshold close enough to be
+useful is close enough to oscillate, and each change of mind costs a solver rebuild and a
+visible hitch.
+
+Getting that measurement right took three attempts, and each failure was the same shape:
+a rule that looked like it was rejecting noise was actually rejecting the signal.
+
+- **It read the viewer's frame delta**, which is clamped to a tenth of a second so one
+  long frame cannot blow the simulation up. Correct for stepping the physics, ruinous for
+  measuring: every machine below ten frames a second reported as exactly ten. The meter
+  now times itself.
+- **It discarded frames longer than a cutoff** as "a hidden tab, not a slow frame". That
+  discards the whole population on a slow machine and keeps the handful of quick ones —
+  on headless software rendering it reported 37 fps on a page managing 0.2. Long frames
+  are now clamped rather than dropped, so they still count; the hidden-tab case is handled
+  by clearing the window when the tab comes back.
+- **It compared the median frame interval**, which ignores gaps, and gaps are the thing
+  being measured. Frames arriving in bursts separated by stalls have a fast median and a
+  terrible throughput. It now uses throughput — total time over frames in it — which is
+  what a viewer actually experiences.
+
 ## Cruise performance
 
 Stage 8 asks the question the project exists for: how much fuel does each of these
@@ -578,6 +642,7 @@ npm run verify:pressure                           # physics of the surface press
 npm run verify:wake                               # physics of the trailing wake
 npm run verify:clock                              # the simulation runs on one clock
 npm run verify:analysis                           # the cruise analysis sheet and its chart
+npm run verify:quality                            # the quality tiers, and what they must not touch
 ```
 
 `verify:analysis` is the one that keeps the chart honest. A chart is the part of a
