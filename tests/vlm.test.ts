@@ -13,6 +13,21 @@ import { solveLattice, type LatticePanel, type LatticeReference } from '../src/p
  * induced drag that Prandtl showed it must.
  */
 
+/**
+ * How long a lattice test may take.
+ *
+ * Vitest's default is five seconds, which these are not entitled to. The convergence
+ * sweeps and the biplane cases each factorise a dense influence matrix of several
+ * hundred panels, a few times over; on a quiet machine the file runs in eleven seconds
+ * and on a busy one the biplane sweep alone took six and a half. That is a test which
+ * passes or fails on what else the machine is doing, which is no test at all - and it
+ * would have failed first on a shared CI runner, in the deploy, rather than here.
+ *
+ * Generous on purpose. The number is not a performance budget; a lattice solve that
+ * genuinely hangs will hang, and a slow one is still correct.
+ */
+const LATTICE_TIMEOUT = 600_000;
+
 const DEG = Math.PI / 180;
 
 interface PlanformOptions {
@@ -189,7 +204,7 @@ describe('finite span costs lift and adds drag', () => {
     const result = solveLattice(panels, { ...reference, stream: streamAt(4) });
     expect(result.spanEfficiency).toBeGreaterThan(0.99);
     expect(result.spanEfficiency).toBeLessThan(1.02);
-  });
+  }, LATTICE_TIMEOUT);
 
   /**
    * A coarse lattice reports slightly *less* induced drag than the elliptical minimum,
@@ -224,7 +239,7 @@ describe('finite span costs lift and adds drag', () => {
     expect(finer).toBeLessThan(fine * 0.6);
     expect(finest).toBeLessThan(finer * 0.6);
     expect(finest).toBeLessThan(0.02);
-  });
+  }, LATTICE_TIMEOUT);
 
   /**
    * And the same on a rectangular planform, which is the case the old formulation could
@@ -251,7 +266,7 @@ describe('finite span costs lift and adds drag', () => {
     for (let i = 2; i < steps.length; i++) {
       expect(Math.abs(steps[i] - steps[i - 1])).toBeLessThan(Math.abs(steps[i - 1] - steps[i - 2]));
     }
-  });
+  }, LATTICE_TIMEOUT);
 
   it('penalises a rectangular planform, which is why wings are tapered', () => {
     const span = 20;
@@ -260,7 +275,7 @@ describe('finite span costs lift and adds drag', () => {
     const result = solveLattice(panels, { ...reference, stream: streamAt(4) });
     expect(result.spanEfficiency).toBeLessThan(0.99);
     expect(result.spanEfficiency).toBeGreaterThan(0.85);
-  });
+  }, LATTICE_TIMEOUT);
 });
 
 /**
@@ -356,7 +371,7 @@ describe('two surfaces interfere', () => {
   it('has full interference when the two wings are coincident', () => {
     expect(biplane(0.001).sigma).toBeGreaterThan(0.93);
     expect(biplane(0.001).sigma).toBeLessThanOrEqual(1.02);
-  });
+  }, LATTICE_TIMEOUT);
 
   /**
    * Far apart they are two independent wings, each achieving its own minimum, so the
@@ -367,7 +382,7 @@ describe('two surfaces interfere', () => {
     const { sigma, e } = biplane(2);
     expect(sigma).toBeLessThan(0.05);
     expect(e).toBeGreaterThan(1.9);
-  });
+  }, LATTICE_TIMEOUT);
 
   /** And between the two, the interference has to fall away monotonically. */
   it('loses interference monotonically as the gap opens', () => {
@@ -383,7 +398,7 @@ describe('two surfaces interfere', () => {
     expect(sigmas[1]).toBeLessThan(0.8);
     expect(sigmas[5]).toBeGreaterThan(0.15);
     expect(sigmas[5]).toBeLessThan(0.45);
-  });
+  }, LATTICE_TIMEOUT);
 });
 
 /**
