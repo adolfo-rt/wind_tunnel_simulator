@@ -10,6 +10,7 @@ import { kmhToMs } from './core/atmosphere';
 import { FlowSolver } from './physics/FlowSolver';
 import { SLOW_MOTION, SimulationClock, establishingSteps } from './physics/clock';
 import { SliceView, type SliceAxis, type SliceField } from './physics/SliceView';
+import { legendState } from './ui/legends';
 import {
   STREAMLINE_COUNTS,
   Streamlines,
@@ -207,14 +208,15 @@ slice.setFreeStream(kmhToMs(store.get().speedKmh));
  * the streamlines are still on the speed ramp.
  */
 const updateLegendVisibility = () => {
-  const sliceOnSpeed = sliceEnabled.checked && slice.showing === 'speed';
-  const sliceOnCrossFlow = sliceEnabled.checked && slice.showing === 'crossflow';
-  const showing = sliceOnSpeed || streamlinesEnabled.checked;
-  sliceLegend.hidden = !showing || !solver.supported;
-  crossflowLegend.hidden = !sliceOnCrossFlow || !solver.supported;
-  legendCaption.textContent = sliceOnSpeed
-    ? 'Local airspeed, m/s — streamlines and slice alike'
-    : 'Local airspeed, m/s — the streamlines';
+  const legends = legendState({
+    sliceVisible: sliceEnabled.checked,
+    sliceField: slice.showing,
+    streamlines: streamlinesEnabled.checked,
+    solverSupported: solver.supported,
+  });
+  sliceLegend.hidden = !legends.showSpeed;
+  crossflowLegend.hidden = !legends.showCrossFlow;
+  legendCaption.textContent = legends.speedOwner;
   // Its own legend, because Cp is a different quantity on a different scale. Sharing the
   // speed bar would have been tidier and would have said something untrue. It does not
   // depend on the grid solver, because the panel model runs on the CPU and works on any
@@ -227,8 +229,24 @@ pressureEnabled.addEventListener('change', () => {
   updateLegendVisibility();
 });
 
+/*
+ * The slice's own controls follow the slice.
+ *
+ * Its orientation, its position and what it measures are meaningless while it is hidden,
+ * but they stayed fully live: a highlighted Cross-flow button and a slider that moved a
+ * plane nobody could see. They are disabled with it, and stay disabled when there is no
+ * solver to drive them at all.
+ */
+function syncSliceControls(): void {
+  const usable = sliceEnabled.checked && solver.supported;
+  slicePosition.disabled = !usable;
+  for (const button of axisButtons) button.disabled = !usable;
+  for (const button of fieldButtons) button.disabled = !usable;
+}
+
 sliceEnabled.addEventListener('change', () => {
   slice.setVisible(sliceEnabled.checked);
+  syncSliceControls();
   updateLegendVisibility();
 });
 slicePosition.addEventListener('input', () =>
@@ -263,6 +281,7 @@ for (const button of fieldButtons) {
   });
 }
 
+syncSliceControls();
 updateLegendVisibility();
 
 // ---- Streamlines ------------------------------------------------------------

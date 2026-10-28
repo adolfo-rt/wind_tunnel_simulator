@@ -869,3 +869,39 @@ html, body {
   text-transform: uppercase;
   color: var(--text-faint);
 }
+
+/*
+ * Which visualisation a legend belongs to, said first.
+ *
+ * With the slice on cross-flow and the streamlines on, two bars are on screen at once
+ * drawn from the same blue-to-red ramp but measuring different quantities on different
+ * scales - airspeed to 500, cross-flow to 25. That is correct and both are needed, but
+ * side by side and unlabelled it reads as one legend duplicated. Naming the owner in
+ * emphasis at the head of each caption is what tells them apart.
+ */
+.legend-owner {
+  color: var(--text);
+  font-weight: 650;
+}
+
+/*
+ * Controls that are switched off have to look switched off.
+ *
+ * Disabling the slice's orientation, position and field while the slice is hidden is
+ * only an improvement if it is visible: a button that is dimmed says "not now", whereas
+ * one that looks live and ignores the click says nothing at all, which is worse than
+ * leaving it working.
+ */
+.axis:disabled,
+.speed-slider:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.axis:disabled:hover {
+  color: var(--text-faint);
+  background: transparent;
+}
+
+.speed-slider:disabled::-webkit-slider-thumb { cursor: not-allowed; }
+.speed-slider:disabled::-moz-range-thumb { cursor: not-allowed; }
