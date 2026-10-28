@@ -3,6 +3,7 @@ import {
   cellsPerStep,
   chordCells,
   discSeeds,
+  particleLifetime,
   particleTextureSize,
   recordCount,
   startFractions,
@@ -224,3 +225,79 @@ describe('the colour ramp is shared', () => {
   });
 });
 
+
+/**
+ * The tracers arrive steadily, rather than in sheets.
+ *
+ * Reported from the running tunnel: "sometimes the streamlines appear in bursts - a very
+ * short and dense plane, then a sparse period, then another". That is a synchronised
+ * cohort. Every particle is born at age zero when the view resets, so every one that
+ * never reaches the outlet - the slow air in the wake, the stagnation point on the nose -
+ * reaches a SHARED maximum age on the same frame, restarts at the inlet on the same
+ * frame, and crosses as one sheet. Restarting together keeps them together, so it
+ * repeats once per lifetime for as long as the tunnel runs.
+ */
+describe('particle lifetimes are spread', () => {
+  it('gives each particle its own, around the nominal', () => {
+    expect(particleLifetime(10, 0)).toBeCloseTo(5);
+    expect(particleLifetime(10, 0.5)).toBeCloseTo(10);
+    expect(particleLifetime(10, 0.999)).toBeCloseTo(14.99, 1);
+  });
+
+  /** Never zero and never unbounded, whatever stagger it is handed. */
+  it('stays within a sane band of the nominal', () => {
+    for (const stagger of startFractions(512)) {
+      const life = particleLifetime(30, stagger);
+      expect(life).toBeGreaterThanOrEqual(15);
+      expect(life).toBeLessThan(45);
+    }
+  });
+
+  /**
+   * The property that matters, measured the way the bug was: run the lifecycle and count
+   * restarts per frame. With one shared lifetime the count spikes periodically; with the
+   * spread it stays flat.
+   */
+  it('keeps restarts even instead of letting them pulse', () => {
+    const restartProfile = (spread: boolean) => {
+      const count = 4096;
+      const nominal = 2.5;
+      const dt = 0.01;
+      const stagger = startFractions(count);
+      const x = new Float64Array(count);
+      const age = new Float64Array(count);
+      const life = new Float64Array(count);
+      const speed = new Float64Array(count);
+      for (let i = 0; i < count; i++) {
+        x[i] = stagger[i];
+        // A fifth of them in slow-moving air, which is what makes a cohort age out
+        // together rather than leaving by the outlet at staggered times.
+        speed[i] = i % 5 === 0 ? 0.35 : 1;
+        life[i] = spread ? particleLifetime(nominal, stagger[i]) : nominal;
+      }
+      const perFrame: number[] = [];
+      for (let frame = 0; frame < 1200; frame++) {
+        let restarts = 0;
+        for (let i = 0; i < count; i++) {
+          x[i] += speed[i] * dt;
+          age[i] += dt;
+          if (x[i] > 1 || age[i] > life[i]) {
+            x[i] = 0;
+            age[i] = 0;
+            restarts++;
+          }
+        }
+        perFrame.push(restarts);
+      }
+      // Discard the opening, which is the first pass emptying out.
+      const settled = perFrame.slice(400);
+      const mean = settled.reduce((a, b) => a + b, 0) / settled.length;
+      return Math.max(...settled) / mean;
+    };
+
+    // The bug, kept as the baseline so the fix cannot be quietly undone.
+    expect(restartProfile(false)).toBeGreaterThan(3);
+    // And the fix: no frame carries much more than its share.
+    expect(restartProfile(true)).toBeLessThan(2);
+  });
+});

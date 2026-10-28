@@ -559,12 +559,27 @@ viewer.onFrame((delta, elapsed) => {
     slice.setVelocity(solver.velocityTexture);
     streamlines.setVelocity(solver.velocityTexture);
     streamlines.step(delta);
-    if (elapsed - lastStatusPaint > 0.25) {
+    if (elapsed - lastStatusPaint > (clock.establishingSteps > 0 ? 0.1 : 0.25)) {
       lastStatusPaint = elapsed;
       const { grid, cells, jacobiIterations, steps } = solver.stats;
-      flowStatus.textContent =
-        `${grid.x}×${grid.y}×${grid.z} cells (${(cells / 1000).toFixed(0)}k) · ` +
-        `${jacobiIterations} pressure iterations · ${steps} steps`;
+      /*
+       * Say when the field is still filling, because it does not look like the flow.
+       *
+       * While establishing, the clock runs the solver one step per frame whatever the
+       * airspeed - deliberately, since a field that has never seen the aircraft has no
+       * rate of change worth scaling, and the honest rate at 100 km/h would leave the
+       * tunnel empty for half a minute. The side effect is that the slice churns at a
+       * fixed rate unrelated to the slider for the first few seconds and then abruptly
+       * slows to the real one, which reads as a bug. It is the field converging rather
+       * than the air moving, so it is labelled as that rather than left to puzzle over.
+       */
+      const settling = clock.establishingSteps;
+      flowStatus.textContent = settling > 0
+        ? `Establishing the flow — ${settling} steps to go. Until it reaches the far ` +
+          `end there is no flow rate to show, so this runs flat out rather than at the ` +
+          `tunnel's speed.`
+        : `${grid.x}×${grid.y}×${grid.z} cells (${(cells / 1000).toFixed(0)}k) · ` +
+          `${jacobiIterations} pressure iterations · ${steps} steps`;
       paintPerformance();
     }
   } else if (elapsed - lastStatusPaint > 0.25) {

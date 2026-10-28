@@ -22,6 +22,18 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
  * The radius goes as the square root of the index so that equal counts of points fall in
  * equal areas — spacing them linearly would crowd the centre and leave the rim bare,
  * and since the tunnel's cross-section is a disc, the outer annuli are most of the air.
+ *
+ * SEEN HEAD-ON THIS LOOKS LIKE A SPIRAL, AND IT IS SUPPOSED TO.
+ *
+ * Those arms are parastichies - the same Fibonacci spirals the eye picks out of a real
+ * sunflower head - and they are a property of the construction being as uniform as it
+ * can be, not of the points clustering. The golden angle is the most irrational rotation
+ * there is, so consecutive points never line up and the arms the eye joins up are made
+ * of indices far apart. Measured over 4096 points: equal-area rings hold 512 each
+ * exactly, twelve angular sectors hold 340 to 343 against 341.3 expected, and
+ * nearest-neighbour spacing varies by 13 per cent across the disc. The tests below check
+ * all three, so the illusion cannot be mistaken for a defect, or a defect for the
+ * illusion.
  */
 export function discSeeds(count: number, radius: number): DiscPoint[] {
   const points: DiscPoint[] = [];
@@ -171,3 +183,20 @@ function radicalInverse(index: number): number {
   return result;
 }
 
+
+/**
+ * How long one particle lives, spread about the nominal lifetime.
+ *
+ * Mirrors what the update shader does, and exists so the spread can be reasoned about
+ * and tested rather than only seen. A single shared lifetime makes the streamlines
+ * pulse: every particle starts at age zero after a reset, so every one that never
+ * reaches the outlet - the slow air, the wake, the stagnation point on the nose - ages
+ * out on the same frame and restarts at the inlet as one dense sheet. Restarting
+ * together keeps them together, so it repeats once per lifetime indefinitely.
+ *
+ * `stagger` is the particle's permanent release fraction, already uniform over [0,1),
+ * so reusing it here costs nothing and correlates with nothing that matters.
+ */
+export function particleLifetime(nominal: number, stagger: number): number {
+  return nominal * (0.5 + stagger);
+}
