@@ -8,6 +8,10 @@ serve/
 shots/
 analysis*.png
 
+# Generated from GLOSSARY.md by `npm run glossary:pdf`. Regenerable, and a binary
+# that would churn the history on every wording change.
+GLOSSARY.pdf
+
 # Scratch diagnostics. They live in scripts/ because node has to resolve playwright
 # from the project, but they are session tools, not project assets - the keepers are
 # named without the dot (verify-flow, verify-streamlines, shoot, views).

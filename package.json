@@ -20,7 +20,8 @@
     "verify:clock": "node scripts/verify-clock.mjs",
     "verify:analysis": "node scripts/verify-analysis.mjs",
     "verify:quality": "node scripts/verify-quality.mjs",
-    "dataset": "WRITE_DATASET=1 vitest run tests/cruiseDataset.test.ts"
+    "dataset": "WRITE_DATASET=1 vitest run tests/cruiseDataset.test.ts",
+    "glossary:pdf": "node scripts/glossary-pdf.mjs"
   },
   "dependencies": {
     "three": "^0.180.0"
