@@ -33,6 +33,13 @@ for you — creating the Pages site needs admin rights the workflow's token does
 Until that is done the deploy job fails at `configure-pages` with "Get Pages site
 failed", while the build and tests still pass.
 
+## New to aerodynamics?
+
+[**GLOSSARY.md**](GLOSSARY.md) defines every term this project uses — lift, drag,
+surface pressure, angle of attack, span efficiency and the rest — grouped by subject
+rather than alphabetically, with a real figure from the roster against each one. Start
+there if phrases like "pressure coefficient" or "induced drag" are not already familiar.
+
 ## Project stages
 
 The project is built in stages, each independently testable.
